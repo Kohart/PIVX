@@ -11,8 +11,9 @@
  **/
 // Copyright (c) 2017-2021 The PIVX Core developers
 
-#ifndef COIN_H_
-#define COIN_H_
+#ifndef PIVX_LIBZEROCOIN_COIN_H
+#define PIVX_LIBZEROCOIN_COIN_H
+
 #include "Denominations.h"
 #include "Params.h"
 #include "amount.h"
@@ -29,7 +30,7 @@ namespace libzerocoin
     class InvalidSerialException : public std::exception {
     public:
         std::string message;
-        InvalidSerialException(const std::string &message) : message(message) {}
+        explicit InvalidSerialException(const std::string &message) : message(message) {}
     };
 
     int ExtractVersionFromSerial(const CBigNum& bnSerial);
@@ -53,7 +54,7 @@ public:
         strm >> *this;
     }
 
-    PublicCoin(const ZerocoinParams* p);
+    explicit PublicCoin(const ZerocoinParams* p);
 
     /**Generates a public coin
      *
@@ -84,4 +85,4 @@ private:
 };
 
 } /* namespace libzerocoin */
-#endif /* COIN_H_ */
+#endif // PIVX_LIBZEROCOIN_COIN_H

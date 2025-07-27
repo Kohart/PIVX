@@ -18,7 +18,7 @@
 #include "wallet/wallet.h"
 #include "walletmodel.h"
 
-#include "qt/pivx/qtutils.h"
+#include "qtutils.h"
 
 #include <QApplication>
 #include <QCheckBox>

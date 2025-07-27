@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef PIVX_SAPLINGSCRIPTPUBKEYMAN_H
-#define PIVX_SAPLINGSCRIPTPUBKEYMAN_H
+#ifndef PIVX_SAPLING_SAPLINGSCRIPTPUBKEYMAN_H
+#define PIVX_SAPLING_SAPLINGSCRIPTPUBKEYMAN_H
 
 #include "consensus/consensus.h"
 #include "sapling/incrementalmerkletree.h"
@@ -45,7 +45,7 @@ class SaplingNoteData
 public:
 
     SaplingNoteData() : nullifier() { }
-    SaplingNoteData(const libzcash::SaplingIncomingViewingKey& _ivk) : ivk {_ivk}, nullifier() { }
+    explicit SaplingNoteData(const libzcash::SaplingIncomingViewingKey& _ivk) : ivk {_ivk}, nullifier() { }
     SaplingNoteData(const libzcash::SaplingIncomingViewingKey& _ivk, const uint256& n) : ivk {_ivk}, nullifier(n) { }
 
     /* witnesses/ivk: only for own (received) outputs */
@@ -147,7 +147,7 @@ typedef std::map<SaplingOutPoint, SaplingNoteData> mapSaplingNoteData_t;
 class SaplingScriptPubKeyMan {
 
 public:
-    SaplingScriptPubKeyMan(CWallet *parent) : wallet(parent) {}
+    explicit SaplingScriptPubKeyMan(CWallet *parent) : wallet(parent) {}
 
     ~SaplingScriptPubKeyMan() {};
 
@@ -436,4 +436,4 @@ private:
     TxNullifiers mapTxSaplingNullifiers;
 };
 
-#endif //PIVX_SAPLINGSCRIPTPUBKEYMAN_H
+#endif // PIVX_SAPLING_SAPLINGSCRIPTPUBKEYMAN_H

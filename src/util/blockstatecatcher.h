@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php.
 
-#ifndef PIVX_BLOCKSTATECATCHER_H
-#define PIVX_BLOCKSTATECATCHER_H
+#ifndef PIVX_UTIL_BLOCKSTATECATCHER_H
+#define PIVX_UTIL_BLOCKSTATECATCHER_H
 
 #include "consensus/validation.h"
 #include "validationinterface.h"
@@ -17,7 +17,7 @@ public:
     uint256 hash;
     bool found;
     CValidationState state;
-    BlockStateCatcher(const uint256& hashIn) : hash(hashIn), found(false), state(){};
+    explicit BlockStateCatcher(const uint256& hashIn) : hash(hashIn), found(false), state(){};
     void setBlockHash(const uint256& _hash) { clear(); hash = _hash; }
     void clear() { hash.SetNull(); found = false; state = CValidationState(); }
     bool stateErrorFound() { return found && state.IsError(); }
@@ -56,4 +56,4 @@ public:
     }
 };
 
-#endif //PIVX_BLOCKSTATECATCHER_H
+#endif // PIVX_UTIL_BLOCKSTATECATCHER_H

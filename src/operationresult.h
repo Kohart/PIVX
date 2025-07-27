@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php.
 
-#ifndef OPERATIONRESULT_H
-#define OPERATIONRESULT_H
+#ifndef PIVX_OPERATIONRESULT_H
+#define PIVX_OPERATIONRESULT_H
 
 #include "optional.h"
 #include <string>
@@ -36,10 +36,10 @@ private:
     Optional<T> m_obj_res{nullopt};
 public:
     CallResult() : OperationResult(false) {}
-    CallResult(T _obj) : OperationResult(true), m_obj_res(_obj) { }
-    CallResult(const std::string& error) : OperationResult(false, error) { }
+    explicit CallResult(T _obj) : OperationResult(true), m_obj_res(_obj) { }
+    explicit CallResult(const std::string& error) : OperationResult(false, error) { }
     const Optional<T>& getObjResult() const { return m_obj_res; }
 };
 
 
-#endif //OPERATIONRESULT_H
+#endif // PIVX_OPERATIONRESULT_H

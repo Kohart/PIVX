@@ -5,8 +5,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef PIVX_WALLET_H
-#define PIVX_WALLET_H
+#ifndef PIVX_WALLET_WALLET_H
+#define PIVX_WALLET_WALLET_H
 
 #include "addressbook.h"
 #include "amount.h"
@@ -1143,6 +1143,7 @@ public:
     bool CreateBudgetFeeTX(CTransactionRef& tx, const uint256& hash, CReserveKey& keyChange, CAmount fee);
 
     bool IsUsed(const CTxDestination address) const;
+    bool IsUsed(const libzcash::SaplingPaymentAddress address) const;
 
     isminetype IsMine(const CTxIn& txin) const;
     CAmount GetDebit(const CTxIn& txin, const isminefilter& filter) const;
@@ -1260,7 +1261,7 @@ protected:
     CPubKey vchPubKey;
 
 public:
-    CReserveKey(CWallet* pwalletIn)
+    explicit CReserveKey(CWallet* pwalletIn)
     {
         nIndex = -1;
         pwallet = pwalletIn;
@@ -1353,4 +1354,4 @@ public:
     }
 };
 
-#endif // PIVX_WALLET_H
+#endif // PIVX_WALLET_WALLET_H

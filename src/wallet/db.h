@@ -4,8 +4,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_DB_H
-#define BITCOIN_DB_H
+#ifndef PIVX_WALLET_DB_H
+#define PIVX_WALLET_DB_H
 
 #include "clientversion.h"
 #include "fs.h"
@@ -46,7 +46,7 @@ public:
     std::unordered_map<std::string, WalletDatabaseFileId> m_fileids;
     std::condition_variable_any m_db_in_use;
 
-    BerkeleyEnvironment(const fs::path& env_directory);
+    explicit BerkeleyEnvironment(const fs::path& env_directory);
     ~BerkeleyEnvironment();
     void Reset();
 
@@ -111,7 +111,7 @@ public:
     }
 
     /** Create DB handle to real database */
-    BerkeleyDatabase(const fs::path& wallet_path, bool mock = false) :
+    explicit BerkeleyDatabase(const fs::path& wallet_path, bool mock = false) :
         nUpdateCounter(0), nLastSeen(0), nLastFlushed(0), nLastWalletUpdate(0)
     {
         env = GetWalletEnv(wallet_path, strFile);
@@ -402,4 +402,4 @@ public:
     bool static Rewrite(BerkeleyDatabase& database, const char* pszSkip = nullptr);
 };
 
-#endif // BITCOIN_DB_H
+#endif // PIVX_WALLET_DB_H

@@ -15,6 +15,7 @@
 #include "quorums_commitment.h"
 #include "quorums_dkgsessionmgr.h"
 #include "shutdown.h"
+#include "tiertwo/tiertwo_sync_state.h"
 #include "univalue.h"
 #include "validation.h"
 
@@ -33,7 +34,7 @@ static uint256 MakeQuorumKey(const CQuorum& q)
 {
     CHashWriter hw(SER_NETWORK, 0);
     hw << (uint8_t)q.params.type;
-    hw << q.pindexQuorum->GetBlockHash();
+    hw << q.qc.quorumHash;
     for (const auto& dmn : q.members) {
         hw << dmn->proTxHash;
     }
@@ -51,13 +52,12 @@ CQuorum::~CQuorum()
     }
 }
 
-void CQuorum::Init(const uint256& _minedBlockHash, const CBlockIndex* _pindexQuorum, const std::vector<CDeterministicMNCPtr>& _members, const std::vector<bool>& _validMembers, const CBLSPublicKey& _quorumPublicKey)
+void CQuorum::Init(const CFinalCommitment& _qc, const CBlockIndex* _pindexQuorum, const uint256& _minedBlockHash, const std::vector<CDeterministicMNCPtr>& _members)
 {
-    minedBlockHash = _minedBlockHash;
+    qc = _qc;
     pindexQuorum = _pindexQuorum;
     members = _members;
-    validMembers = _validMembers;
-    quorumPublicKey = _quorumPublicKey;
+    minedBlockHash = _minedBlockHash;
 }
 
 bool CQuorum::IsMember(const uint256& proTxHash) const
@@ -74,7 +74,7 @@ bool CQuorum::IsValidMember(const uint256& proTxHash) const
 {
     for (size_t i = 0; i < members.size(); i++) {
         if (members[i]->proTxHash == proTxHash) {
-            return validMembers[i];
+            return qc.validMembers[i];
         }
     }
     return false;
@@ -82,7 +82,7 @@ bool CQuorum::IsValidMember(const uint256& proTxHash) const
 
 CBLSPublicKey CQuorum::GetPubKeyShare(size_t memberIdx) const
 {
-    if (quorumVvec == nullptr || memberIdx >= members.size() || !validMembers[memberIdx]) {
+    if (quorumVvec == nullptr || memberIdx >= members.size() || !qc.validMembers[memberIdx]) {
         return CBLSPublicKey();
     }
     auto& m = members[memberIdx];
@@ -141,17 +141,17 @@ void CQuorum::StartCachePopulatorThread(std::shared_ptr<CQuorum> _this)
     }
 
     cxxtimer::Timer t(true);
-    LogPrintf("CQuorum::StartCachePopulatorThread -- start\n");
+    LogPrint(BCLog::LLMQ, "CQuorum::StartCachePopulatorThread -- start\n");
 
     // this thread will exit after some time
     // when then later some other thread tries to get keys, it will be much faster
     _this->cachePopulatorThread = std::thread(&TraceThread<std::function<void()> >, "quorum-cachepop", [_this, t] {
         for (size_t i = 0; i < _this->members.size() && !_this->stopCachePopulatorThread && !ShutdownRequested(); i++) {
-            if (_this->validMembers[i]) {
+            if (_this->qc.validMembers[i]) {
                 _this->GetPubKeyShare(i);
             }
         }
-        LogPrintf("CQuorum::StartCachePopulatorThread -- done. time=%d\n", t.count());
+        LogPrint(BCLog::LLMQ, "CQuorum::StartCachePopulatorThread -- done. time=%d\n", t.count());
     });
 }
 
@@ -165,7 +165,7 @@ CQuorumManager::CQuorumManager(CEvoDB& _evoDb, CBLSWorker& _blsWorker, CDKGSessi
 
 void CQuorumManager::UpdatedBlockTip(const CBlockIndex* pindexNew, bool fInitialDownload)
 {
-    if (fInitialDownload || !activeMasternodeManager || !deterministicMNManager->IsDIP3Enforced(pindexNew->nHeight)) {
+    if (!g_tiertwo_sync_state.IsBlockchainSynced() || !activeMasternodeManager) {
         return;
     }
 
@@ -185,7 +185,7 @@ bool CQuorumManager::BuildQuorumFromCommitment(const CFinalCommitment& qc, const
     assert(qc.quorumHash == pindexQuorum->GetBlockHash());
 
     auto members = deterministicMNManager->GetAllQuorumMembers((Consensus::LLMQType)qc.llmqType, pindexQuorum);
-    quorum->Init(minedBlockHash, pindexQuorum, members, qc.validMembers, qc.quorumPublicKey);
+    quorum->Init(qc, pindexQuorum, minedBlockHash, members);
 
     bool hasValidVvec = false;
     if (quorum->ReadContributions(evoDb)) {
@@ -195,7 +195,7 @@ bool CQuorumManager::BuildQuorumFromCommitment(const CFinalCommitment& qc, const
             quorum->WriteContributions(evoDb);
             hasValidVvec = true;
         } else {
-            LogPrintf("CQuorumManager::%s -- quorum.ReadContributions and BuildQuorumContributions for block %s failed\n", __func__, qc.quorumHash.ToString());
+            LogPrint(BCLog::LLMQ, "CQuorumManager::%s -- quorum.ReadContributions and BuildQuorumContributions for block %s failed\n", __func__, qc.quorumHash.ToString());
         }
     }
 
@@ -224,20 +224,20 @@ bool CQuorumManager::BuildQuorumContributions(const CFinalCommitment& fqc, std::
     cxxtimer::Timer t2(true);
     quorumVvec = blsWorker.BuildQuorumVerificationVector(vvecs);
     if (quorumVvec == nullptr) {
-        LogPrintf("CQuorumManager::%s -- failed to build quorumVvec\n", __func__);
+        LogPrint(BCLog::LLMQ, "CQuorumManager::%s -- failed to build quorumVvec\n", __func__);
         // without the quorum vvec, there can't be a skShare, so we fail here. Failure is not fatal here, as it still
         // allows to use the quorum as a non-member (verification through the quorum pub key)
         return false;
     }
     skShare = blsWorker.AggregateSecretKeys(skContributions);
     if (!skShare.IsValid()) {
-        LogPrintf("CQuorumManager::%s -- failed to build skShare\n", __func__);
+        LogPrint(BCLog::LLMQ, "CQuorumManager::%s -- failed to build skShare\n", __func__);
         // We don't bail out here as this is not a fatal error and still allows us to recover public key shares (as we
         // have a valid quorum vvec at this point)
     }
     t2.stop();
 
-    LogPrintf("CQuorumManager::%s -- built quorum vvec and skShare. time=%d\n", __func__, t2.count());
+    LogPrint(BCLog::LLMQ, "CQuorumManager::%s -- built quorum vvec and skShare. time=%d\n", __func__, t2.count());
 
     quorum->quorumVvec = quorumVvec;
     quorum->skShare = skShare;
@@ -323,7 +323,7 @@ CQuorumCPtr CQuorumManager::GetQuorum(Consensus::LLMQType llmqType, const uint25
         pindexQuorum = LookupBlockIndex(quorumHash);
 
         if (!pindexQuorum) {
-            LogPrint(BCLog::LLMQ, "CQuorumManager::%s -- block %s not found", __func__, quorumHash.ToString());
+            LogPrint(BCLog::LLMQ, "CQuorumManager::%s -- block %s not found.\n", __func__, quorumHash.ToString());
             return nullptr;
         }
     }

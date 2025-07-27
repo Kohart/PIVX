@@ -11,8 +11,8 @@
 **/
 // Copyright (c) 2017-2021 The PIVX Core developers
 
-#ifndef PARAMS_H_
-#define PARAMS_H_
+#ifndef PIVX_LIBZEROCOIN_PARAMS_H
+#define PIVX_LIBZEROCOIN_PARAMS_H
 
 #include "bignum.h"
 #include "ZerocoinDefines.h"
@@ -156,8 +156,7 @@ public:
 	* compromised. The integer "N" must be a MINIMUM of 1024
 	* in length. 3072 bits is strongly recommended.
 	**/
-	ZerocoinParams(CBigNum accumulatorModulus,
-	       uint32_t securityLevel = ZEROCOIN_DEFAULT_SECURITYLEVEL);
+        explicit ZerocoinParams(CBigNum accumulatorModulus, uint32_t securityLevel = ZEROCOIN_DEFAULT_SECURITYLEVEL);
 
 	bool initialized;
 
@@ -196,4 +195,4 @@ public:
 
 } /* namespace libzerocoin */
 
-#endif /* PARAMS_H_ */
+#endif // PIVX_LIBZEROCOIN_PARAMS_H

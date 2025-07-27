@@ -126,7 +126,7 @@ uint256 CBudgetManager::SubmitFinalBudget()
 
     if (nBlockStart - nCurrentHeight > finalizationWindow) {
         LogPrint(BCLog::MNBUDGET,"%s: Too early for finalization. Current block is %ld, next Superblock is %ld.\n", __func__, nCurrentHeight, nBlockStart);
-        LogPrint(BCLog::MNBUDGET,"%s: First possible block for finalization: %ld. Last possible block for finalization: %ld. "
+        LogPrint(BCLog::MNBUDGET,"%s: First possible block for finalization: %ld. Last possible block for finalization: %ld. " /* Continued */
                 "You have to wait for %ld block(s) until Budget finalization will be possible\n", __func__, nFinalizationStart, nBlockStart, nOffsetToStart);
         return UINT256_ZERO;
     }
@@ -163,6 +163,11 @@ uint256 CBudgetManager::SubmitFinalBudget()
         // Get our change address
         if (vpwallets.empty() || !vpwallets[0]) {
             LogPrint(BCLog::MNBUDGET,"%s: Wallet not found\n", __func__);
+            return UINT256_ZERO;
+        }
+        // Exit if wallet is locked
+        if (vpwallets[0]->IsLocked()) {
+            LogPrint(BCLog::MNBUDGET, "%s: Wallet is locked, can't make collateral transaction.\n", __func__);
             return UINT256_ZERO;
         }
         CReserveKey keyChange(vpwallets[0]);

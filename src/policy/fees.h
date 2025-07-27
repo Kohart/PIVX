@@ -2,8 +2,9 @@
 // Copyright (c) 2009-2015 The Bitcoin developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
-#ifndef BITCOIN_POLICYESTIMATOR_H
-#define BITCOIN_POLICYESTIMATOR_H
+
+#ifndef PIVX_POLICY_FEES_H
+#define PIVX_POLICY_FEES_H
 
 #include "amount.h"
 #include "feerate.h"
@@ -200,7 +201,7 @@ class CBlockPolicyEstimator
 {
 public:
     /** Create new BlockPolicyEstimator and initialize stats tracking classes with default values */
-    CBlockPolicyEstimator(const CFeeRate& minRelayFee);
+    explicit CBlockPolicyEstimator(const CFeeRate& minRelayFee);
 
     /** Process all the transactions that have been included in a block */
     void processBlock(unsigned int nBlockHeight,
@@ -249,4 +250,4 @@ private:
     unsigned int trackedTxs;
     unsigned int untrackedTxs;
 };
-#endif /*BITCOIN_POLICYESTIMATOR_H */
+#endif // PIVX_POLICY_FEES_H

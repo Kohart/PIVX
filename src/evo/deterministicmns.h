@@ -3,8 +3,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef PIVX_DETERMINISTICMNS_H
-#define PIVX_DETERMINISTICMNS_H
+#ifndef PIVX_EVO_DETERMINISTICMNS_H
+#define PIVX_EVO_DETERMINISTICMNS_H
 
 #include "arith_uint256.h"
 #include "bls/bls_wrapper.h"
@@ -184,7 +184,7 @@ private:
 
 public:
     CDeterministicMN() = delete; // no default constructor, must specify internalId
-    CDeterministicMN(uint64_t _internalId) : internalId(_internalId)
+    explicit CDeterministicMN(uint64_t _internalId) : internalId(_internalId)
     {
         // only non-initial values
         assert(_internalId != std::numeric_limits<uint64_t>::max());
@@ -601,4 +601,4 @@ private:
 
 extern std::unique_ptr<CDeterministicMNManager> deterministicMNManager;
 
-#endif //PIVX_DETERMINISTICMNS_H
+#endif // PIVX_EVO_DETERMINISTICMNS_H

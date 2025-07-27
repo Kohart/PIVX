@@ -3,8 +3,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php.
 
-#ifndef ZC_NOTE_H_
-#define ZC_NOTE_H_
+#ifndef PIVX_SAPLING_NOTE_H
+#define PIVX_SAPLING_NOTE_H
 
 #include "optional.h"
 #include "sapling/address.h"
@@ -24,7 +24,7 @@ protected:
     uint64_t value_{0};
 public:
     BaseNote() {}
-    BaseNote(uint64_t value) : value_(value) {};
+    explicit BaseNote(uint64_t value) : value_(value) {};
     virtual ~BaseNote() {};
 
     inline uint64_t value() const { return value_; };
@@ -149,4 +149,4 @@ public:
 
 }
 
-#endif // ZC_NOTE_H_
+#endif // PIVX_SAPLING_NOTE_H

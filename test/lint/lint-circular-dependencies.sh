@@ -26,8 +26,6 @@ EXPECTED_CIRCULAR_DEPENDENCIES=(
     "net -> tiertwo/net_masternodes -> net"
     "policy/fees -> txmempool -> policy/fees"
     "policy/policy -> validation -> policy/policy"
-    "qt/pivx/pivxgui -> qt/pivx/qtutils -> qt/pivx/pivxgui"
-    "qt/pivx/qtutils -> qt/pivx/snackbar -> qt/pivx/qtutils"
     "sapling/saplingscriptpubkeyman -> wallet/wallet -> sapling/saplingscriptpubkeyman"
     "spork -> sporkdb -> spork"
     "spork -> validation -> spork"

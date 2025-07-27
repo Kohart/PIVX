@@ -18,13 +18,8 @@
 #include <QtDBus>
 #include <stdint.h>
 #endif
-// Include ApplicationServices.h after QtDbus to avoid redefinition of check().
-// This affects at least OSX 10.6. See /usr/include/AssertMacros.h for details.
-// Note: This could also be worked around using:
-// #define __ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES 0
 #ifdef Q_OS_MAC
 #include "macnotificationhandler.h"
-#include <ApplicationServices/ApplicationServices.h>
 #endif
 
 
@@ -75,7 +70,7 @@ class FreedesktopImage
 {
 public:
     FreedesktopImage() {}
-    FreedesktopImage(const QImage& img);
+    explicit FreedesktopImage(const QImage& img);
 
     static int metaType();
 

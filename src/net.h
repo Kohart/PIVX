@@ -4,8 +4,8 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_NET_H
-#define BITCOIN_NET_H
+#ifndef PIVX_NET_H
+#define PIVX_NET_H
 
 #include "addrdb.h"
 #include "addrman.h"
@@ -23,6 +23,7 @@
 #include "uint256.h"
 #include "utilstrencodings.h"
 #include "threadinterrupt.h"
+#include "validation.h"
 
 #include <atomic>
 #include <cstdint>
@@ -33,6 +34,20 @@
 
 #ifndef WIN32
 #include <arpa/inet.h>
+#endif
+
+// "Optimistic send" was introduced in the beginning of the Bitcoin project. I assume this was done because it was
+// thought that "send" would be very cheap when the send buffer is empty. This is not true, as shown by profiling.
+// When a lot of load is seen on the network, the "send" call done in the message handler thread can easily use up 20%
+// of time, effectively blocking things that could be done in parallel. We have introduced a way to wake up the select()
+// call in the network thread, which allows us to disable optimistic send without introducing an artificial latency/delay
+// when sending data. This however only works on non-WIN32 platforms for now. When we add support for WIN32 platforms,
+// we can completely remove optimistic send.
+#ifdef WIN32
+#define DEFAULT_ALLOW_OPTIMISTIC_SEND true
+#else
+#define DEFAULT_ALLOW_OPTIMISTIC_SEND false
+#define USE_WAKEUP_PIPE
 #endif
 
 class CAddrMan;
@@ -209,7 +224,7 @@ public:
     bool ForNode(NodeId id, std::function<bool(CNode* pnode)> func);
     bool ForNode(const CService& addr, const std::function<bool(const CNode* pnode)>& cond, const std::function<bool(CNode* pnode)>& func);
 
-    void PushMessage(CNode* pnode, CSerializedNetMsg&& msg);
+    void PushMessage(CNode* pnode, CSerializedNetMsg&& msg, bool allowOptimisticSend = DEFAULT_ALLOW_OPTIMISTIC_SEND);
 
     template<typename Callable>
     bool ForEachNodeContinueIf(Callable&& func)
@@ -280,10 +295,14 @@ public:
         post();
     };
 
+    std::vector<CNode*> CopyNodeVector(std::function<bool(const CNode* pnode)> cond);
+    std::vector<CNode*> CopyNodeVector();
+    void ReleaseNodeVector(const std::vector<CNode*>& vecNodes);
+
     // Clears AskFor requests for every known peer
     void RemoveAskFor(const uint256& invHash, int invType);
 
-    void RelayInv(CInv& inv);
+    void RelayInv(CInv& inv, int minProtoVersion = ActiveProtocol());
     bool IsNodeConnected(const CAddress& addr);
     // Retrieves a connected peer (if connection success). Used only to check peer address availability for now.
     CNode* ConnectNode(const CAddress& addrConnect);
@@ -356,6 +375,9 @@ public:
     TierTwoConnMan* GetTierTwoConnMan() { return m_tiertwo_conn_man.get(); };
     /** Update the node to be a iqr member if needed */
     void UpdateQuorumRelayMemberIfNeeded(CNode* pnode);
+    /** Interrupt the select/poll system call **/
+    void WakeSelect();
+
 private:
     struct ListenSocket {
         SOCKET socket;
@@ -474,6 +496,12 @@ private:
     std::atomic<bool> flagInterruptMsgProc;
 
     CThreadInterrupt interruptNet;
+
+#ifdef USE_WAKEUP_PIPE
+    /** a pipe which is added to select() calls to wakeup before the timeout */
+    int wakeupPipe[2]{-1, -1};
+#endif
+    std::atomic<bool> wakeupSelectNeeded{false};
 
     std::thread threadDNSAddressSeed;
     std::thread threadSocketHandler;
@@ -945,4 +973,4 @@ inline std::chrono::microseconds PoissonNextSend(std::chrono::microseconds now, 
     return std::chrono::microseconds{PoissonNextSend(now.count(), average_interval.count())};
 }
 
-#endif // BITCOIN_NET_H
+#endif // PIVX_NET_H

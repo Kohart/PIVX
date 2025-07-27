@@ -5,8 +5,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_SCRIPT_SCRIPT_H
-#define BITCOIN_SCRIPT_SCRIPT_H
+#ifndef PIVX_SCRIPT_SCRIPT_H
+#define PIVX_SCRIPT_SCRIPT_H
 
 #include <assert.h>
 #include <climits>
@@ -31,6 +31,9 @@ static const int MAX_PUBKEYS_PER_MULTISIG = 20;
 
 // Maximum script length in bytes
 static const int MAX_SCRIPT_SIZE = 10000;
+
+// Maximum number of values on script interpreter stack
+static const int MAX_STACK_SIZE = 1000;
 
 // Threshold for nLockTime: below this value it is interpreted as block number,
 // otherwise as UNIX timestamp.
@@ -415,7 +418,7 @@ public:
         return ret;
     }
 
-    CScript(int64_t b)        { operator<<(b); }
+    explicit CScript(int64_t b)        { operator<<(b); }
 
     explicit CScript(opcodetype b)     { operator<<(b); }
     explicit CScript(const CScriptNum& b) { operator<<(b); }
@@ -664,4 +667,4 @@ public:
 };
 
 
-#endif // BITCOIN_SCRIPT_SCRIPT_H
+#endif // PIVX_SCRIPT_SCRIPT_H

@@ -3,7 +3,8 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include "quorums_signing_shares.h"
+#include "quorums_signing.h"
+
 #include "activemasternode.h"
 #include "bls/bls_batchverifier.h"
 #include "cxxtimer.h"
@@ -11,7 +12,7 @@
 #include "net.h"
 #include "net_processing.h"
 #include "netmessagemaker.h"
-#include "quorums_signing.h"
+#include "quorums_signing_shares.h"
 #include "quorums_utils.h"
 #include "random.h"
 #include "shutdown.h"
@@ -24,42 +25,20 @@ namespace llmq
 
 std::unique_ptr<CSigSharesManager> quorumSigSharesManager{nullptr};
 
-template <typename M>
-static std::pair<typename M::const_iterator, typename M::const_iterator> FindBySignHash(const M& m, const uint256& signHash)
-{
-    return std::make_pair(
-        m.lower_bound(std::make_pair(signHash, (uint16_t)0)),
-        m.upper_bound(std::make_pair(signHash, std::numeric_limits<uint16_t>::max())));
-}
-template <typename M>
-static size_t CountBySignHash(const M& m, const uint256& signHash)
-{
-    auto itPair = FindBySignHash(m, signHash);
-    size_t count = 0;
-    while (itPair.first != itPair.second) {
-        count++;
-        ++itPair.first;
-    }
-    return count;
-}
-
-template <typename M>
-static void RemoveBySignHash(M& m, const uint256& signHash)
-{
-    auto itPair = FindBySignHash(m, signHash);
-    m.erase(itPair.first, itPair.second);
-}
-
 void CSigShare::UpdateKey()
 {
     key.first = llmq::utils::BuildSignHash(*this);
     key.second = quorumMember;
 }
 
+std::string CSigSesAnn::ToString() const
+{
+    return strprintf("sessionId=%d, llmqType=%d, quorumHash=%s, id=%s, msgHash=%s",
+        sessionId, llmqType, quorumHash.ToString(), id.ToString(), msgHash.ToString());
+}
+
 void CSigSharesInv::Merge(const CSigSharesInv& inv2)
 {
-    assert(llmqType == inv2.llmqType);
-    assert(signHash == inv2.signHash);
     for (size_t i = 0; i < inv.size(); i++) {
         if (inv2.inv[i]) {
             inv[i] = inv2.inv[i];
@@ -74,7 +53,7 @@ size_t CSigSharesInv::CountSet() const
 
 std::string CSigSharesInv::ToString() const
 {
-    std::string str = strprintf("signHash=%s, inv=(", signHash.ToString());
+    std::string str = "(";
     bool first = true;
     for (size_t i = 0; i < inv.size(); i++) {
         if (!inv[i]) {
@@ -91,13 +70,9 @@ std::string CSigSharesInv::ToString() const
     return str;
 }
 
-void CSigSharesInv::Init(Consensus::LLMQType _llmqType, const uint256& _signHash)
+void CSigSharesInv::Init(size_t size)
 {
-    llmqType = _llmqType;
-    signHash = _signHash;
-
-    size_t llmqSize = (size_t)(Params().GetConsensus().llmqs.at(_llmqType).size);
-    inv.resize(llmqSize, false);
+    inv.resize(size, false);
 }
 
 bool CSigSharesInv::IsSet(uint16_t quorumMember) const
@@ -112,67 +87,101 @@ void CSigSharesInv::Set(uint16_t quorumMember, bool v)
     inv[quorumMember] = v;
 }
 
-CSigSharesNodeState::Session& CSigSharesNodeState::GetOrCreateSession(Consensus::LLMQType llmqType, const uint256& signHash)
+void CSigSharesInv::SetAll(bool v)
 {
-    auto& s = sessions[signHash];
+    for (size_t i = 0; i < inv.size(); i++) {
+        inv[i] = v;
+    }
+}
+
+std::string CBatchedSigShares::ToInvString() const
+{
+    CSigSharesInv inv;
+    // we use 400 here no matter what the real size is. We don't really care about that size as we just want to call ToString()
+    inv.Init(400);
+    for (size_t i = 0; i < sigShares.size(); i++) {
+        inv.inv[sigShares[i].first] = true;
+    }
+    return inv.ToString();
+}
+
+template <typename T>
+static void InitSession(CSigSharesNodeState::Session& s, const uint256& signHash, T& from)
+{
+    const auto& params = Params().GetConsensus().llmqs.at((Consensus::LLMQType)from.llmqType);
+
+    s.llmqType = (Consensus::LLMQType)from.llmqType;
+    s.quorumHash = from.quorumHash;
+    s.id = from.id;
+    s.msgHash = from.msgHash;
+    s.signHash = signHash;
+    s.announced.Init((size_t)params.size);
+    s.requested.Init((size_t)params.size);
+    s.knows.Init((size_t)params.size);
+}
+
+CSigSharesNodeState::Session& CSigSharesNodeState::GetOrCreateSessionFromShare(const llmq::CSigShare& sigShare)
+{
+    auto& s = sessions[sigShare.GetSignHash()];
     if (s.announced.inv.empty()) {
-        s.announced.Init(llmqType, signHash);
-        s.requested.Init(llmqType, signHash);
-        s.knows.Init(llmqType, signHash);
-    } else {
-        assert(s.announced.llmqType == llmqType);
-        assert(s.requested.llmqType == llmqType);
-        assert(s.knows.llmqType == llmqType);
+        InitSession(s, sigShare.GetSignHash(), sigShare);
     }
     return s;
 }
 
-void CSigSharesNodeState::MarkAnnounced(const uint256& signHash, const CSigSharesInv& inv)
+CSigSharesNodeState::Session& CSigSharesNodeState::GetOrCreateSessionFromAnn(const llmq::CSigSesAnn& ann)
 {
-    GetOrCreateSession((Consensus::LLMQType)inv.llmqType, signHash).announced.Merge(inv);
+    auto signHash = llmq::utils::BuildSignHash((Consensus::LLMQType)ann.llmqType, ann.quorumHash, ann.id, ann.msgHash);
+    auto& s = sessions[signHash];
+    if (s.announced.inv.empty()) {
+        InitSession(s, signHash, ann);
+    }
+    return s;
 }
 
-void CSigSharesNodeState::MarkRequested(const uint256& signHash, const CSigSharesInv& inv)
+CSigSharesNodeState::Session* CSigSharesNodeState::GetSessionBySignHash(const uint256& signHash)
 {
-    GetOrCreateSession((Consensus::LLMQType)inv.llmqType, signHash).requested.Merge(inv);
+    auto it = sessions.find(signHash);
+    if (it == sessions.end()) {
+        return nullptr;
+    }
+    return &it->second;
 }
 
-void CSigSharesNodeState::MarkKnows(const uint256& signHash, const CSigSharesInv& inv)
+CSigSharesNodeState::Session* CSigSharesNodeState::GetSessionByRecvId(uint32_t sessionId)
 {
-    GetOrCreateSession((Consensus::LLMQType)inv.llmqType, signHash).knows.Merge(inv);
+    auto it = sessionByRecvId.find(sessionId);
+    if (it == sessionByRecvId.end()) {
+        return nullptr;
+    }
+    return it->second;
 }
 
-void CSigSharesNodeState::MarkAnnounced(Consensus::LLMQType llmqType, const uint256& signHash, uint16_t quorumMember)
+bool CSigSharesNodeState::GetSessionInfoByRecvId(uint32_t sessionId, SessionInfo& retInfo)
 {
-    GetOrCreateSession(llmqType, signHash).announced.Set(quorumMember, true);
-}
+    auto s = GetSessionByRecvId(sessionId);
+    if (!s) {
+        return false;
+    }
+    retInfo.llmqType = s->llmqType;
+    retInfo.quorumHash = s->quorumHash;
+    retInfo.id = s->id;
+    retInfo.msgHash = s->msgHash;
+    retInfo.signHash = s->signHash;
+    retInfo.quorum = s->quorum;
 
-void CSigSharesNodeState::MarkRequested(Consensus::LLMQType llmqType, const uint256& signHash, uint16_t quorumMember)
-{
-    GetOrCreateSession(llmqType, signHash).requested.Set(quorumMember, true);
-}
-
-void CSigSharesNodeState::MarkKnows(Consensus::LLMQType llmqType, const uint256& signHash, uint16_t quorumMember)
-{
-    GetOrCreateSession(llmqType, signHash).knows.Set(quorumMember, true);
+    return true;
 }
 
 void CSigSharesNodeState::RemoveSession(const uint256& signHash)
 {
-    sessions.erase(signHash);
-    // pendingIncomingRecSigs.erase(signHash);
-    RemoveBySignHash(requestedSigShares, signHash);
-    RemoveBySignHash(pendingIncomingSigShares, signHash);
-}
-
-CSigSharesInv CBatchedSigShares::ToInv() const
-{
-    CSigSharesInv inv;
-    inv.Init((Consensus::LLMQType)llmqType, llmq::utils::BuildSignHash(*this));
-    for (size_t i = 0; i < sigShares.size(); i++) {
-        inv.inv[sigShares[i].first] = true;
+    auto it = sessions.find(signHash);
+    if (it != sessions.end()) {
+        sessionByRecvId.erase(it->second.recvSessionId);
+        sessions.erase(it);
     }
-    return inv;
+    requestedSigShares.EraseAllForSignHash(signHash);
+    pendingIncomingSigShares.EraseAllForSignHash(signHash);
 }
 
 //////////////////////
@@ -198,6 +207,16 @@ void CSigSharesManager::StopWorkerThread()
     }
 }
 
+void CSigSharesManager::RegisterAsRecoveredSigsListener()
+{
+    quorumSigningManager->RegisterRecoveredSigsListener(this);
+}
+
+void CSigSharesManager::UnregisterAsRecoveredSigsListener()
+{
+    quorumSigningManager->UnregisterRecoveredSigsListener(this);
+}
+
 void CSigSharesManager::Interrupt()
 {
     interruptSigningShare();
@@ -210,89 +229,205 @@ void CSigSharesManager::ProcessMessage(CNode* pfrom, const std::string& strComma
         return;
     }
 
-    if (strCommand == NetMsgType::QSIGSHARESINV) {
-        CSigSharesInv inv;
-        vRecv >> inv;
-        ProcessMessageSigSharesInv(pfrom, inv, connman);
+    if (strCommand == NetMsgType::QSIGSHARE) {
+        std::vector<CSigShare> sigShares;
+        vRecv >> sigShares;
+
+        if (sigShares.size() > MAX_MSGS_SIG_SHARES) {
+            LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- too many sigs in QSIGSHARE message. cnt=%d, max=%d, node=%d\n", __func__, sigShares.size(), MAX_MSGS_SIG_SHARES, pfrom->GetId());
+            BanNode(pfrom->GetId());
+            return;
+        }
+
+        for (auto& sigShare : sigShares) {
+            ProcessMessageSigShare(pfrom->GetId(), sigShare, connman);
+        }
+    }
+
+    if (strCommand == NetMsgType::QSIGSESANN) {
+        std::vector<CSigSesAnn> msgs;
+        vRecv >> msgs;
+        if (msgs.size() > MAX_MSGS_CNT_QSIGSESANN) {
+            LogPrintf("CSigSharesManager::%s -- too many announcements in QSIGSESANN message. cnt=%d, max=%d, node=%d\n", __func__, msgs.size(), MAX_MSGS_CNT_QSIGSESANN, pfrom->GetId());
+            BanNode(pfrom->GetId());
+            return;
+        }
+        for (auto& ann : msgs) {
+            if (!ProcessMessageSigSesAnn(pfrom, ann, connman)) {
+                BanNode(pfrom->GetId());
+                return;
+            }
+        }
+    } else if (strCommand == NetMsgType::QSIGSHARESINV) {
+        std::vector<CSigSharesInv> msgs;
+        vRecv >> msgs;
+        if (msgs.size() > MAX_MSGS_CNT_QSIGSHARESINV) {
+            LogPrintf("CSigSharesManager::%s -- too many invs in QSIGSHARESINV message. cnt=%d, max=%d, node=%d\n", __func__, msgs.size(), MAX_MSGS_CNT_QSIGSHARESINV, pfrom->GetId());
+            BanNode(pfrom->GetId());
+            return;
+        }
+        for (auto& inv : msgs) {
+            if (!ProcessMessageSigSharesInv(pfrom, inv, connman)) {
+                BanNode(pfrom->GetId());
+                return;
+            }
+        }
     } else if (strCommand == NetMsgType::QGETSIGSHARES) {
-        CSigSharesInv inv;
-        vRecv >> inv;
-        ProcessMessageGetSigShares(pfrom, inv, connman);
+        std::vector<CSigSharesInv> msgs;
+        vRecv >> msgs;
+        if (msgs.size() > MAX_MSGS_CNT_QGETSIGSHARES) {
+            LogPrintf("CSigSharesManager::%s -- too many invs in QGETSIGSHARES message. cnt=%d, max=%d, node=%d\n", __func__, msgs.size(), MAX_MSGS_CNT_QGETSIGSHARES, pfrom->GetId());
+            BanNode(pfrom->GetId());
+            return;
+        }
+        for (auto& inv : msgs) {
+            if (!ProcessMessageGetSigShares(pfrom, inv, connman)) {
+                BanNode(pfrom->GetId());
+                return;
+            }
+        }
     } else if (strCommand == NetMsgType::QBSIGSHARES) {
-        CBatchedSigShares batchedSigShares;
-        vRecv >> batchedSigShares;
-        ProcessMessageBatchedSigShares(pfrom, batchedSigShares, connman);
+        std::vector<CBatchedSigShares> msgs;
+        vRecv >> msgs;
+        size_t totalSigsCount = 0;
+        for (auto& bs : msgs) {
+            totalSigsCount += bs.sigShares.size();
+        }
+        if (totalSigsCount > MAX_MSGS_TOTAL_BATCHED_SIGS) {
+            LogPrintf("CSigSharesManager::%s -- too many sigs in QBSIGSHARES message. cnt=%d, max=%d, node=%d\n", __func__, msgs.size(), MAX_MSGS_TOTAL_BATCHED_SIGS, pfrom->GetId());
+            BanNode(pfrom->GetId());
+            return;
+        }
+        for (auto& bs : msgs) {
+            if (!ProcessMessageBatchedSigShares(pfrom, bs, connman)) {
+                BanNode(pfrom->GetId());
+                return;
+            }
+        }
     }
 }
 
-bool CSigSharesManager::VerifySigSharesInv(NodeId from, const CSigSharesInv& inv)
+bool CSigSharesManager::ProcessMessageSigSesAnn(CNode* pfrom, const CSigSesAnn& ann, CConnman& connman)
 {
-    Consensus::LLMQType llmqType = (Consensus::LLMQType)inv.llmqType;
-    if (!Params().GetConsensus().llmqs.count(llmqType) || inv.signHash.IsNull()) {
-        BanNode(from);
+    auto llmqType = (Consensus::LLMQType)ann.llmqType;
+    if (!Params().GetConsensus().llmqs.count(llmqType)) {
+        return false;
+    }
+    if (ann.sessionId == (uint32_t)-1 || ann.quorumHash.IsNull() || ann.id.IsNull() || ann.msgHash.IsNull()) {
         return false;
     }
 
-    if (!activeMasternodeManager) {
-        return false;
+    LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- ann={%s}, node=%d\n", __func__, ann.ToString(), pfrom->GetId());
+
+    auto quorum = quorumManager->GetQuorum(llmqType, ann.quorumHash);
+    if (!quorum) {
+        // TODO should we ban here?
+        LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- quorum %s not found, node=%d\n", __func__,
+            ann.quorumHash.ToString(), pfrom->GetId());
+        return true; // let's still try other announcements from the same message
     }
 
+    auto signHash = llmq::utils::BuildSignHash(llmqType, ann.quorumHash, ann.id, ann.msgHash);
+
+    LOCK(cs);
+    auto& nodeState = nodeStates[pfrom->GetId()];
+    auto& session = nodeState.GetOrCreateSessionFromAnn(ann);
+    nodeState.sessionByRecvId.erase(session.recvSessionId);
+    nodeState.sessionByRecvId.erase(ann.sessionId);
+    session.recvSessionId = ann.sessionId;
+    session.quorum = quorum;
+    nodeState.sessionByRecvId.emplace(ann.sessionId, &session);
+
+    return true;
+}
+
+bool CSigSharesManager::VerifySigSharesInv(NodeId from, Consensus::LLMQType llmqType, const CSigSharesInv& inv)
+{
     size_t quorumSize = (size_t)Params().GetConsensus().llmqs.at(llmqType).size;
 
     if (inv.inv.size() != quorumSize) {
-        BanNode(from);
         return false;
     }
     return true;
 }
 
-void CSigSharesManager::ProcessMessageSigSharesInv(CNode* pfrom, const CSigSharesInv& inv, CConnman& connman)
+bool CSigSharesManager::ProcessMessageSigSharesInv(CNode* pfrom, const CSigSharesInv& inv, CConnman& connman)
 {
-    if (!VerifySigSharesInv(pfrom->GetId(), inv)) {
-        return;
+    CSigSharesNodeState::SessionInfo sessionInfo;
+    if (!GetSessionInfoByRecvId(pfrom->GetId(), inv.sessionId, sessionInfo)) {
+        return true;
+    }
+
+    if (!VerifySigSharesInv(pfrom->GetId(), sessionInfo.llmqType, inv)) {
+        return false;
     }
 
     // TODO for PoSe, we should consider propagating shares even if we already have a recovered sig
-    if (quorumSigningManager->HasRecoveredSigForSession(inv.signHash)) {
-        return;
+    if (quorumSigningManager->HasRecoveredSigForSession(sessionInfo.signHash)) {
+        return true;
     }
 
-    LogPrintf("llmq", "CSigSharesManager::%s -- inv={%s}, node=%d\n", __func__, inv.ToString(), pfrom->GetId());
+    LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- signHash=%s, inv={%s}, node=%d\n", __func__,
+        sessionInfo.signHash.ToString(), inv.ToString(), pfrom->GetId());
+
+    if (sessionInfo.quorum->quorumVvec == nullptr) {
+        // TODO we should allow to ask other nodes for the quorum vvec if we missed it in the DKG
+        LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- we don't have the quorum vvec for %s, not requesting sig shares. node=%d\n", __func__,
+            sessionInfo.quorumHash.ToString(), pfrom->GetId());
+        return true;
+    }
 
     LOCK(cs);
     auto& nodeState = nodeStates[pfrom->GetId()];
-    nodeState.MarkAnnounced(inv.signHash, inv);
-    nodeState.MarkKnows(inv.signHash, inv);
+    auto session = nodeState.GetSessionByRecvId(inv.sessionId);
+    if (!session) {
+        return true;
+    }
+    session->announced.Merge(inv);
+    session->knows.Merge(inv);
+    return true;
 }
 
-void CSigSharesManager::ProcessMessageGetSigShares(CNode* pfrom, const CSigSharesInv& inv, CConnman& connman)
+bool CSigSharesManager::ProcessMessageGetSigShares(CNode* pfrom, const CSigSharesInv& inv, CConnman& connman)
 {
-    if (!VerifySigSharesInv(pfrom->GetId(), inv)) {
-        return;
+    CSigSharesNodeState::SessionInfo sessionInfo;
+    if (!GetSessionInfoByRecvId(pfrom->GetId(), inv.sessionId, sessionInfo)) {
+        return true;
+    }
+
+    if (!VerifySigSharesInv(pfrom->GetId(), sessionInfo.llmqType, inv)) {
+        return false;
     }
 
     // TODO for PoSe, we should consider propagating shares even if we already have a recovered sig
-    if (quorumSigningManager->HasRecoveredSigForSession(inv.signHash)) {
-        return;
+    if (quorumSigningManager->HasRecoveredSigForSession(sessionInfo.signHash)) {
+        return true;
     }
 
-    LogPrintf("llmq", "CSigSharesManager::%s -- inv={%s}, node=%d\n", __func__, inv.ToString(), pfrom->GetId());
+    LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- signHash=%s, inv={%s}, node=%d\n", __func__,
+        sessionInfo.signHash.ToString(), inv.ToString(), pfrom->GetId());
 
     LOCK(cs);
     auto& nodeState = nodeStates[pfrom->GetId()];
-    nodeState.MarkRequested(inv.signHash, inv);
-    nodeState.MarkKnows(inv.signHash, inv);
+    auto session = nodeState.GetSessionByRecvId(inv.sessionId);
+    if (!session) {
+        return true;
+    }
+    session->requested.Merge(inv);
+    session->knows.Merge(inv);
+    return true;
 }
 
-void CSigSharesManager::ProcessMessageBatchedSigShares(CNode* pfrom, const CBatchedSigShares& batchedSigShares, CConnman& connman)
+bool CSigSharesManager::ProcessMessageBatchedSigShares(CNode* pfrom, const CBatchedSigShares& batchedSigShares, CConnman& connman)
 {
+    CSigSharesNodeState::SessionInfo sessionInfo;
+    if (!GetSessionInfoByRecvId(pfrom->GetId(), batchedSigShares.sessionId, sessionInfo)) {
+        return true;
+    }
+
     bool ban = false;
-    if (!PreVerifyBatchedSigShares(pfrom->GetId(), batchedSigShares, ban)) {
-        if (ban) {
-            BanNode(pfrom->GetId());
-            return;
-        }
-        return;
+    if (!PreVerifyBatchedSigShares(pfrom->GetId(), sessionInfo, batchedSigShares, ban)) {
+        return !ban;
     }
 
     std::vector<CSigShare> sigShares;
@@ -303,14 +438,14 @@ void CSigSharesManager::ProcessMessageBatchedSigShares(CNode* pfrom, const CBatc
         auto& nodeState = nodeStates[pfrom->GetId()];
 
         for (size_t i = 0; i < batchedSigShares.sigShares.size(); i++) {
-            CSigShare sigShare = batchedSigShares.RebuildSigShare(i);
-            nodeState.requestedSigShares.erase(sigShare.GetKey());
+            CSigShare sigShare = RebuildSigShare(sessionInfo, batchedSigShares, i);
+            nodeState.requestedSigShares.Erase(sigShare.GetKey());
 
             // TODO track invalid sig shares received for PoSe?
             // It's important to only skip seen *valid* sig shares here. If a node sends us a
             // batch of mostly valid sig shares with a single invalid one and thus batched
             // verification fails, we'd skip the valid ones in the future if received from other nodes
-            if (this->sigShares.count(sigShare.GetKey())) {
+            if (this->sigShares.Has(sigShare.GetKey())) {
                 continue;
             }
 
@@ -323,77 +458,106 @@ void CSigSharesManager::ProcessMessageBatchedSigShares(CNode* pfrom, const CBatc
         }
     }
 
-    LogPrintf("llmq", "CSigSharesManager::%s -- shares=%d, new=%d, inv={%s}, node=%d\n", __func__,
-        batchedSigShares.sigShares.size(), sigShares.size(), batchedSigShares.ToInv().ToString(), pfrom->GetId());
+    LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- signHash=%s, shares=%d, new=%d, inv={%s}, node=%d\n", __func__,
+        sessionInfo.signHash.ToString(), batchedSigShares.sigShares.size(), sigShares.size(), batchedSigShares.ToInvString(), pfrom->GetId());
 
     if (sigShares.empty()) {
-        return;
+        return true;
     }
 
     LOCK(cs);
     auto& nodeState = nodeStates[pfrom->GetId()];
     for (auto& s : sigShares) {
-        nodeState.pendingIncomingSigShares.emplace(s.GetKey(), s);
+        nodeState.pendingIncomingSigShares.Add(s.GetKey(), s);
     }
+    return true;
 }
 
-bool CSigSharesManager::PreVerifyBatchedSigShares(NodeId nodeId, const CBatchedSigShares& batchedSigShares, bool& retBan)
+void CSigSharesManager::ProcessMessageSigShare(NodeId fromId, const CSigShare& sigShare, CConnman& connman)
+{
+    auto quorum = quorumManager->GetQuorum((Consensus::LLMQType)sigShare.llmqType, sigShare.quorumHash);
+    if (!quorum) {
+        return;
+    }
+    if (!llmq::utils::IsQuorumActive((Consensus::LLMQType)sigShare.llmqType, quorum->qc.quorumHash)) {
+        // quorum is too old
+        return;
+    }
+    if (!quorum->IsMember(activeMasternodeManager->GetProTx())) {
+        // we're not a member so we can't verify it (we actually shouldn't have received it)
+        return;
+    }
+    if (quorum->quorumVvec == nullptr) {
+        // TODO we should allow to ask other nodes for the quorum vvec if we missed it in the DKG
+        LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- we don't have the quorum vvec for %s, no verification possible. node=%d\n", __func__,
+            quorum->qc.quorumHash.ToString(), fromId);
+        return;
+    }
+
+    if (sigShare.quorumMember >= quorum->members.size()) {
+        LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- quorumMember out of bounds\n", __func__);
+        BanNode(fromId);
+        return;
+    }
+    if (!quorum->qc.validMembers[sigShare.quorumMember]) {
+        LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- quorumMember not valid\n", __func__);
+        BanNode(fromId);
+        return;
+    }
+
+    {
+        LOCK(cs);
+
+        if (sigShares.Has(sigShare.GetKey())) {
+            return;
+        }
+
+        if (quorumSigningManager->HasRecoveredSigForId((Consensus::LLMQType)sigShare.llmqType, sigShare.id)) {
+            return;
+        }
+
+        auto& nodeState = nodeStates[fromId];
+        nodeState.pendingIncomingSigShares.Add(sigShare.GetKey(), sigShare);
+    }
+
+    LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- signHash=%s, id=%s, msgHash=%s, member=%d, node=%d\n", __func__,
+        sigShare.GetSignHash().ToString(), sigShare.id.ToString(), sigShare.msgHash.ToString(), sigShare.quorumMember, fromId);
+}
+
+bool CSigSharesManager::PreVerifyBatchedSigShares(NodeId nodeId, const CSigSharesNodeState::SessionInfo& session, const CBatchedSigShares& batchedSigShares, bool& retBan)
 {
     retBan = false;
 
-    auto llmqType = (Consensus::LLMQType)batchedSigShares.llmqType;
-    if (!Params().GetConsensus().llmqs.count(llmqType)) {
-        retBan = true;
+    if (!llmq::utils::IsQuorumActive(session.llmqType, session.quorum->qc.quorumHash)) {
+        // quorum is too old
+        return false;
+    }
+    if (!session.quorum->IsMember(activeMasternodeManager->GetProTx())) {
+        // we're not a member so we can't verify it (we actually shouldn't have received it)
+        return false;
+    }
+    if (session.quorum->quorumVvec == nullptr) {
+        // TODO we should allow to ask other nodes for the quorum vvec if we missed it in the DKG
+        LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- we don't have the quorum vvec for %s, no verification possible. node=%d\n", __func__,
+            session.quorumHash.ToString(), nodeId);
         return false;
     }
 
-    CQuorumCPtr quorum;
-    {
-        LOCK(cs_main);
-
-        quorum = quorumManager->GetQuorum(llmqType, batchedSigShares.quorumHash);
-        if (!quorum) {
-            // TODO should we ban here?
-            LogPrintf("CSigSharesManager::%s -- quorum %s not found, node=%d\n", __func__,
-                batchedSigShares.quorumHash.ToString(), nodeId);
-            return false;
-        }
-        if (!llmq::utils::IsQuorumActive(llmqType, quorum->pindexQuorum->GetBlockHash())) {
-            // quorum is too old
-            return false;
-        }
-        if (!quorum->IsMember(activeMasternodeManager->GetProTx())) {
-            // we're not a member so we can't verify it (we actually shouldn't have received it)
-            return false;
-        }
-        if (quorum->quorumVvec == nullptr) {
-            // TODO we should allow to ask other nodes for the quorum vvec if we missed it in the DKG
-            LogPrintf("CSigSharesManager::%s -- we don't have the quorum vvec for %s, no verification possible. node=%d\n", __func__,
-                batchedSigShares.quorumHash.ToString(), nodeId);
-            return false;
-        }
-    }
-
-    std::set<uint16_t> dupMembers;
+    std::unordered_set<uint16_t> dupMembers;
 
     for (size_t i = 0; i < batchedSigShares.sigShares.size(); i++) {
         auto quorumMember = batchedSigShares.sigShares[i].first;
-        auto& sigShare = batchedSigShares.sigShares[i].second;
-        if (!sigShare.IsValid()) {
-            retBan = true;
-            return false;
-        }
         if (!dupMembers.emplace(quorumMember).second) {
             retBan = true;
             return false;
         }
 
-        if (quorumMember >= quorum->members.size()) {
+        if (quorumMember >= session.quorum->members.size()) {
             LogPrintf("CSigSharesManager::%s -- quorumMember out of bounds\n", __func__);
             retBan = true;
             return false;
         }
-        if (!quorum->validMembers[quorumMember]) {
+        if (!session.quorum->qc.validMembers[quorumMember]) {
             LogPrintf("CSigSharesManager::%s -- quorumMember not valid\n", __func__);
             retBan = true;
             return false;
@@ -404,8 +568,8 @@ bool CSigSharesManager::PreVerifyBatchedSigShares(NodeId nodeId, const CBatchedS
 
 void CSigSharesManager::CollectPendingSigSharesToVerify(
     size_t maxUniqueSessions,
-    std::map<NodeId, std::vector<CSigShare>>& retSigShares,
-    std::map<std::pair<Consensus::LLMQType, uint256>, CQuorumCPtr>& retQuorums)
+    std::unordered_map<NodeId, std::vector<CSigShare>>& retSigShares,
+    std::unordered_map<std::pair<Consensus::LLMQType, uint256>, CQuorumCPtr, StaticSaltedHasher>& retQuorums)
 {
     {
         LOCK(cs);
@@ -419,21 +583,20 @@ void CSigSharesManager::CollectPendingSigSharesToVerify(
         // invalid, making batch verification fail and revert to per-share verification, which in turn would slow down
         // the whole verification process
 
-        std::set<std::pair<NodeId, uint256>> uniqueSignHashes;
-        llmq::utils::IterateNodesRandom(
-            nodeStates, [&]() { return uniqueSignHashes.size() < maxUniqueSessions; }, [&](NodeId nodeId, CSigSharesNodeState& ns) {
-            if (ns.pendingIncomingSigShares.empty()) {
+        std::unordered_set<std::pair<NodeId, uint256>, StaticSaltedHasher> uniqueSignHashes;
+        llmq::utils::IterateNodesRandom(nodeStates, [&]() { return uniqueSignHashes.size() < maxUniqueSessions; }, [&](NodeId nodeId, CSigSharesNodeState& ns) {
+            if (ns.pendingIncomingSigShares.Empty()) {
                 return false;
             }
-            auto& sigShare = ns.pendingIncomingSigShares.begin()->second;
+            auto& sigShare = *ns.pendingIncomingSigShares.GetFirst();
 
-            bool alreadyHave = this->sigShares.count(sigShare.GetKey()) != 0;
+            bool alreadyHave = this->sigShares.Has(sigShare.GetKey());
             if (!alreadyHave) {
                 uniqueSignHashes.emplace(nodeId, sigShare.GetSignHash());
                 retSigShares[nodeId].emplace_back(sigShare);
             }
-            ns.pendingIncomingSigShares.erase(ns.pendingIncomingSigShares.begin());
-            return !ns.pendingIncomingSigShares.empty(); }, rnd);
+            ns.pendingIncomingSigShares.Erase(sigShare.GetKey());
+            return !ns.pendingIncomingSigShares.Empty(); }, rnd);
 
         if (retSigShares.empty()) {
             return;
@@ -462,20 +625,21 @@ void CSigSharesManager::CollectPendingSigSharesToVerify(
     }
 }
 
-void CSigSharesManager::ProcessPendingSigShares(CConnman& connman)
+bool CSigSharesManager::ProcessPendingSigShares(CConnman& connman)
 {
-    std::map<NodeId, std::vector<CSigShare>> sigSharesByNodes;
-    std::map<std::pair<Consensus::LLMQType, uint256>, CQuorumCPtr> quorums;
+    std::unordered_map<NodeId, std::vector<CSigShare>> sigSharesByNodes;
+    std::unordered_map<std::pair<Consensus::LLMQType, uint256>, CQuorumCPtr, StaticSaltedHasher> quorums;
 
     CollectPendingSigSharesToVerify(32, sigSharesByNodes, quorums);
     if (sigSharesByNodes.empty()) {
-        return;
+        return false;
     }
 
     // It's ok to perform insecure batched verification here as we verify against the quorum public key shares,
     // which are not craftable by individual entities, making the rogue public key attack impossible
     CBLSBatchVerifier<NodeId, SigShareKey> batchVerifier(false, true);
 
+    cxxtimer::Timer prepareTimer(true);
     size_t verifyCount = 0;
     for (auto& p : sigSharesByNodes) {
         auto nodeId = p.first;
@@ -486,33 +650,42 @@ void CSigSharesManager::ProcessPendingSigShares(CConnman& connman)
                 continue;
             }
 
+            // we didn't check this earlier because we use a lazy BLS signature and tried to avoid doing the expensive
+            // deserialization in the message thread
+            if (!sigShare.sigShare.Get().IsValid()) {
+                BanNode(nodeId);
+                // don't process any additional shares from this node
+                break;
+            }
+
             auto quorum = quorums.at(std::make_pair((Consensus::LLMQType)sigShare.llmqType, sigShare.quorumHash));
             auto pubKeyShare = quorum->GetPubKeyShare(sigShare.quorumMember);
 
             if (!pubKeyShare.IsValid()) {
                 // this should really not happen (we already ensured we have the quorum vvec,
                 // so we should also be able to create all pubkey shares)
-                LogPrintf("CSigSharesManager::%s -- pubKeyShare is invalid, which should not be possible here", __func__);
+                LogPrintf("CSigSharesManager::%s -- pubKeyShare is invalid, which should not be possible here.\n", __func__);
                 assert(false);
             }
 
-            batchVerifier.PushMessage(nodeId, sigShare.GetKey(), sigShare.GetSignHash(), sigShare.sigShare, pubKeyShare);
+            batchVerifier.PushMessage(nodeId, sigShare.GetKey(), sigShare.GetSignHash(), sigShare.sigShare.Get(), pubKeyShare);
             verifyCount++;
         }
     }
+    prepareTimer.stop();
 
-    cxxtimer::Timer verifyTimer;
+    cxxtimer::Timer verifyTimer(true);
     batchVerifier.Verify();
     verifyTimer.stop();
 
-    LogPrintf("llmq", "CSigSharesManager::%s -- verified sig shares. count=%d, vt=%d, nodes=%d\n", __func__, verifyCount, verifyTimer.count(), sigSharesByNodes.size());
+    LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- verified sig shares. count=%d, pt=%d, vt=%d, nodes=%d\n", __func__, verifyCount, prepareTimer.count(), verifyTimer.count(), sigSharesByNodes.size());
 
     for (auto& p : sigSharesByNodes) {
         auto nodeId = p.first;
         auto& v = p.second;
 
         if (batchVerifier.badSources.count(nodeId)) {
-            LogPrintf("llmq", "CSigSharesManager::%s -- invalid sig shares from other node, banning peer=%d\n",
+            LogPrintf("CSigSharesManager::%s -- invalid sig shares from other node, banning peer=%d\n",
                 __func__, nodeId);
             // this will also cause re-requesting of the shares that were sent by this node
             BanNode(nodeId);
@@ -521,28 +694,27 @@ void CSigSharesManager::ProcessPendingSigShares(CConnman& connman)
 
         ProcessPendingSigSharesFromNode(nodeId, v, quorums, connman);
     }
+
+    return true;
 }
 
 // It's ensured that no duplicates are passed to this method
-void CSigSharesManager::ProcessPendingSigSharesFromNode(NodeId nodeId, const std::vector<CSigShare>& sigShares, const std::map<std::pair<Consensus::LLMQType, uint256>, CQuorumCPtr>& quorums, CConnman& connman)
+void CSigSharesManager::ProcessPendingSigSharesFromNode(NodeId nodeId,
+    const std::vector<CSigShare>& sigShares,
+    const std::unordered_map<std::pair<Consensus::LLMQType, uint256>, CQuorumCPtr, StaticSaltedHasher>& quorums,
+    CConnman& connman)
 {
     LOCK(cs);
     auto& nodeState = nodeStates[nodeId];
 
     cxxtimer::Timer t(true);
     for (auto& sigShare : sigShares) {
-        // he sent us some valid sig shares, so he must be part of this quorum and is thus interested in our sig shares as well
-        // if this is the first time we received a sig share from this node, we won't announce the currently locally known sig shares to him.
-        // only the upcoming sig shares will be announced to him. this means the first signing session for a fresh quorum will be a bit
-        // slower than for older ones. TODO: fix this (risk of DoS when announcing all at once?)
         auto quorumKey = std::make_pair((Consensus::LLMQType)sigShare.llmqType, sigShare.quorumHash);
-        nodeState.interestedIn.emplace(quorumKey);
-
         ProcessSigShare(nodeId, sigShare, connman, quorums.at(quorumKey));
     }
     t.stop();
 
-    LogPrintf("llmq", "CSigSharesManager::%s -- processed sigShare batch. shares=%d, time=%d, node=%d\n", __func__,
+    LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- processed sigShare batch. shares=%d, time=%d, node=%d\n", __func__,
         sigShares.size(), t.count(), nodeId);
 }
 
@@ -555,13 +727,6 @@ void CSigSharesManager::ProcessSigShare(NodeId nodeId, const CSigShare& sigShare
 
     // prepare node set for direct-push in case this is our sig share
     std::set<NodeId> quorumNodes;
-    if (sigShare.quorumMember == quorum->GetMemberIndex(activeMasternodeManager->GetProTx())) {
-        quorumNodes = connman.GetTierTwoConnMan()->getQuorumNodes((Consensus::LLMQType)sigShare.llmqType, sigShare.quorumHash);
-        // make sure node states are created for these nodes (we might have not received any message from these yet)
-        for (auto otherNodeId : quorumNodes) {
-            nodeStates[otherNodeId].interestedIn.emplace(std::make_pair((Consensus::LLMQType)sigShare.llmqType, sigShare.quorumHash));
-        }
-    }
 
     if (quorumSigningManager->HasRecoveredSigForId(llmqType, sigShare.id)) {
         return;
@@ -570,27 +735,28 @@ void CSigSharesManager::ProcessSigShare(NodeId nodeId, const CSigShare& sigShare
     {
         LOCK(cs);
 
-        if (!sigShares.emplace(sigShare.GetKey(), sigShare).second) {
+        if (!sigShares.Add(sigShare.GetKey(), sigShare)) {
             return;
         }
+        sigSharesToAnnounce.Add(sigShare.GetKey(), true);
 
-        sigSharesToAnnounce.emplace(sigShare.GetKey());
-        firstSeenForSessions.emplace(sigShare.GetSignHash(), GetTimeMillis());
+        // Update the time we've seen the last sigShare
+        timeSeenForSessions[sigShare.GetSignHash()] = GetAdjustedTime();
 
+        // TODO: unreachable
         if (!quorumNodes.empty()) {
             // don't announce and wait for other nodes to request this share and directly send it to them
             // there is no way the other nodes know about this share as this is the one created on this node
-            // this will also indicate interest to the other nodes in sig shares for this quorum
-            for (auto& p : nodeStates) {
-                if (!quorumNodes.count(p.first) && !p.second.interestedIn.count(std::make_pair((Consensus::LLMQType)sigShare.llmqType, sigShare.quorumHash))) {
-                    continue;
-                }
-                p.second.MarkRequested((Consensus::LLMQType)sigShare.llmqType, sigShare.GetSignHash(), sigShare.quorumMember);
-                p.second.MarkKnows((Consensus::LLMQType)sigShare.llmqType, sigShare.GetSignHash(), sigShare.quorumMember);
+            for (auto otherNodeId : quorumNodes) {
+                auto& nodeState = nodeStates[otherNodeId];
+                auto& session = nodeState.GetOrCreateSessionFromShare(sigShare);
+                session.quorum = quorum;
+                session.requested.Set(sigShare.quorumMember, true);
+                session.knows.Set(sigShare.quorumMember, true);
             }
         }
 
-        size_t sigShareCount = CountBySignHash(sigShares, sigShare.GetSignHash());
+        size_t sigShareCount = sigShares.CountForSignHash(sigShare.GetSignHash());
         if (sigShareCount >= quorum->params.threshold) {
             canTryRecovery = true;
         }
@@ -614,14 +780,17 @@ void CSigSharesManager::TryRecoverSig(const CQuorumCPtr& quorum, const uint256& 
 
         auto k = std::make_pair(quorum->params.type, id);
 
-        auto signHash = llmq::utils::BuildSignHash(quorum->params.type, quorum->pindexQuorum->GetBlockHash(), id, msgHash);
-        auto itPair = FindBySignHash(sigShares, signHash);
+        auto signHash = llmq::utils::BuildSignHash(quorum->params.type, quorum->qc.quorumHash, id, msgHash);
+        auto sigShares = this->sigShares.GetAllForSignHash(signHash);
+        if (!sigShares) {
+            return;
+        }
 
         sigSharesForRecovery.reserve((size_t)quorum->params.threshold);
         idsForRecovery.reserve((size_t)quorum->params.threshold);
-        for (auto it = itPair.first; it != itPair.second && sigSharesForRecovery.size() < quorum->params.threshold; ++it) {
+        for (auto it = sigShares->begin(); it != sigShares->end() && sigSharesForRecovery.size() < quorum->params.threshold; ++it) {
             auto& sigShare = it->second;
-            sigSharesForRecovery.emplace_back(sigShare.sigShare);
+            sigSharesForRecovery.emplace_back(sigShare.sigShare.Get());
             idsForRecovery.emplace_back(CBLSId(quorum->members[sigShare.quorumMember]->proTxHash));
         }
 
@@ -640,35 +809,55 @@ void CSigSharesManager::TryRecoverSig(const CQuorumCPtr& quorum, const uint256& 
         return;
     }
 
-    LogPrintf("CSigSharesManager::%s -- recovered signature. id=%s, msgHash=%s, time=%d\n", __func__,
+    LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- recovered signature. id=%s, msgHash=%s, time=%d\n", __func__,
         id.ToString(), msgHash.ToString(), t.count());
 
     CRecoveredSig rs;
     rs.llmqType = quorum->params.type;
-    rs.quorumHash = quorum->pindexQuorum->GetBlockHash();
+    rs.quorumHash = quorum->qc.quorumHash;
     rs.id = id;
     rs.msgHash = msgHash;
-    rs.sig = recoveredSig;
+    rs.sig.Set(recoveredSig);
     rs.UpdateHash();
 
-    auto signHash = llmq::utils::BuildSignHash(rs);
-    bool valid = rs.sig.VerifyInsecure(quorum->quorumPublicKey, signHash);
-    if (!valid) {
-        // this should really not happen as we have verified all signature shares before
-        LogPrintf("CSigSharesManager::%s -- own recovered signature is invalid. id=%s, msgHash=%s\n", __func__,
-            id.ToString(), msgHash.ToString());
-        return;
+    // There should actually be no need to verify the self-recovered signatures as it should always succeed. Let's
+    // however still verify it from time to time, so that we have a chance to catch bugs. We do only this sporadic
+    // verification because this is unbatched and thus slow verification that happens here.
+    if (((recoveredSigsCounter++) % 100) == 0) {
+        auto signHash = llmq::utils::BuildSignHash(rs);
+        bool valid = recoveredSig.VerifyInsecure(quorum->qc.quorumPublicKey, signHash);
+        if (!valid) {
+            // this should really not happen as we have verified all signature shares before
+            LogPrintf("CSigSharesManager::%s -- own recovered signature is invalid. id=%s, msgHash=%s\n", __func__,
+                id.ToString(), msgHash.ToString());
+            return;
+        }
     }
 
     quorumSigningManager->ProcessRecoveredSig(-1, rs, quorum, connman);
 }
 
-// cs must be held
-void CSigSharesManager::CollectSigSharesToRequest(std::map<NodeId, std::map<uint256, CSigSharesInv>>& sigSharesToRequest)
+CDeterministicMNCPtr CSigSharesManager::SelectMemberForRecovery(const CQuorumCPtr& quorum, const uint256& id, int attempt)
 {
-    int64_t now = GetTimeMillis();
-    std::map<SigShareKey, std::vector<NodeId>> nodesBySigShares;
+    assert(attempt < quorum->members.size());
 
+    std::vector<std::pair<uint256, CDeterministicMNCPtr>> v;
+    v.reserve(quorum->members.size());
+    for (const auto& dmn : quorum->members) {
+        auto h = ::SerializeHash(std::make_pair(dmn->proTxHash, id));
+        v.emplace_back(h, dmn);
+    }
+    std::sort(v.begin(), v.end());
+
+    return v[attempt].second;
+}
+
+// TODO unused
+void CSigSharesManager::CollectSigSharesToRequest(std::unordered_map<NodeId, std::unordered_map<uint256, CSigSharesInv, StaticSaltedHasher>>& sigSharesToRequest)
+{
+    AssertLockHeld(cs);
+
+    int64_t now = GetAdjustedTime();
     const size_t maxRequestsForNode = 32;
 
     // avoid requesting from same nodes all the time
@@ -689,18 +878,17 @@ void CSigSharesManager::CollectSigSharesToRequest(std::map<NodeId, std::map<uint
             continue;
         }
 
-        for (auto it = nodeState.requestedSigShares.begin(); it != nodeState.requestedSigShares.end();) {
-            if (now - it->second >= SIG_SHARE_REQUEST_TIMEOUT) {
+        nodeState.requestedSigShares.EraseIf([&](const SigShareKey& k, int64_t t) {
+            if (now - t >= SIG_SHARE_REQUEST_TIMEOUT) {
                 // timeout while waiting for this one, so retry it with another node
-                LogPrintf("llmq", "CSigSharesManager::%s -- timeout while waiting for %s-%d, node=%d\n", __func__,
-                    it->first.first.ToString(), it->first.second, nodeId);
-                it = nodeState.requestedSigShares.erase(it);
-            } else {
-                ++it;
+                LogPrint(BCLog::LLMQ, "CSigSharesManager::CollectSigSharesToRequest -- timeout while waiting for %s-%d, node=%d\n",
+                    k.first.ToString(), k.second, nodeId);
+                return true;
             }
-        }
+            return false;
+        });
 
-        std::map<uint256, CSigSharesInv>* invMap = nullptr;
+        decltype(sigSharesToRequest.begin()->second)* invMap = nullptr;
 
         for (auto& p2 : nodeState.sessions) {
             auto& signHash = p2.first;
@@ -715,21 +903,21 @@ void CSigSharesManager::CollectSigSharesToRequest(std::map<NodeId, std::map<uint
                     continue;
                 }
                 auto k = std::make_pair(signHash, (uint16_t)i);
-                if (sigShares.count(k)) {
+                if (sigShares.Has(k)) {
                     // we already have it
                     session.announced.inv[i] = false;
                     continue;
                 }
-                if (nodeState.requestedSigShares.size() >= maxRequestsForNode) {
+                if (nodeState.requestedSigShares.Size() >= maxRequestsForNode) {
                     // too many pending requests for this node
                     break;
                 }
-                auto it = sigSharesRequested.find(k);
-                if (it != sigSharesRequested.end()) {
-                    if (now - it->second.second >= SIG_SHARE_REQUEST_TIMEOUT && nodeId != it->second.first) {
+                auto p = sigSharesRequested.Get(k);
+                if (p) {
+                    if (now - p->second >= SIG_SHARE_REQUEST_TIMEOUT && nodeId != p->first) {
                         // other node timed out, re-request from this node
-                        LogPrintf("llmq", "CSigSharesManager::%s -- other node timeout while waiting for %s-%d, re-request from=%d, node=%d\n", __func__,
-                            it->first.first.ToString(), it->first.second, nodeId, it->second.first);
+                        LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- other node timeout while waiting for %s-%d, re-request from=%d, node=%d\n", __func__,
+                            k.first.ToString(), k.second, nodeId, p->first);
                     } else {
                         continue;
                     }
@@ -737,10 +925,10 @@ void CSigSharesManager::CollectSigSharesToRequest(std::map<NodeId, std::map<uint
                 // if we got this far we should do a request
 
                 // track when we initiated the request so that we can detect timeouts
-                nodeState.requestedSigShares.emplace(k, now);
+                nodeState.requestedSigShares.Add(k, now);
 
                 // don't request it from other nodes until a timeout happens
-                auto& r = sigSharesRequested[k];
+                auto& r = sigSharesRequested.GetOrAdd(k);
                 r.first = nodeId;
                 r.second = now;
 
@@ -749,7 +937,8 @@ void CSigSharesManager::CollectSigSharesToRequest(std::map<NodeId, std::map<uint
                 }
                 auto& inv = (*invMap)[signHash];
                 if (inv.inv.empty()) {
-                    inv.Init((Consensus::LLMQType)session.announced.llmqType, signHash);
+                    const auto& params = Params().GetConsensus().llmqs.at((Consensus::LLMQType)session.llmqType);
+                    inv.Init((size_t)params.size);
                 }
                 inv.inv[k.second] = true;
 
@@ -760,9 +949,11 @@ void CSigSharesManager::CollectSigSharesToRequest(std::map<NodeId, std::map<uint
     }
 }
 
-// cs must be held
-void CSigSharesManager::CollectSigSharesToSend(std::map<NodeId, std::map<uint256, CBatchedSigShares>>& sigSharesToSend)
+// TODO: unused
+void CSigSharesManager::CollectSigSharesToSend(std::unordered_map<NodeId, std::unordered_map<uint256, CBatchedSigShares, StaticSaltedHasher>>& sigSharesToSend)
 {
+    AssertLockHeld(cs);
+
     for (auto& p : nodeStates) {
         auto nodeId = p.first;
         auto& nodeState = p.second;
@@ -771,7 +962,7 @@ void CSigSharesManager::CollectSigSharesToSend(std::map<NodeId, std::map<uint256
             continue;
         }
 
-        std::map<uint256, CBatchedSigShares>* sigSharesToSend2 = nullptr;
+        decltype(sigSharesToSend.begin()->second)* sigSharesToSend2 = nullptr;
 
         for (auto& p2 : nodeState.sessions) {
             auto& signHash = p2.first;
@@ -790,21 +981,14 @@ void CSigSharesManager::CollectSigSharesToSend(std::map<NodeId, std::map<uint256
                 session.requested.inv[i] = false;
 
                 auto k = std::make_pair(signHash, (uint16_t)i);
-                auto it = sigShares.find(k);
-                if (it == sigShares.end()) {
+                const CSigShare* sigShare = sigShares.Get(k);
+                if (!sigShare) {
                     // he requested something we don'have
                     session.requested.inv[i] = false;
                     continue;
                 }
 
-                auto& sigShare = it->second;
-                if (batchedSigShares.sigShares.empty()) {
-                    batchedSigShares.llmqType = sigShare.llmqType;
-                    batchedSigShares.quorumHash = sigShare.quorumHash;
-                    batchedSigShares.id = sigShare.id;
-                    batchedSigShares.msgHash = sigShare.msgHash;
-                }
-                batchedSigShares.sigShares.emplace_back((uint16_t)i, sigShare.sigShare);
+                batchedSigShares.sigShares.emplace_back((uint16_t)i, sigShare->sigShare);
             }
 
             if (!batchedSigShares.sigShares.empty()) {
@@ -818,49 +1002,79 @@ void CSigSharesManager::CollectSigSharesToSend(std::map<NodeId, std::map<uint256
     }
 }
 
-// cs must be held
-void CSigSharesManager::CollectSigSharesToAnnounce(std::map<NodeId, std::map<uint256, CSigSharesInv>>& sigSharesToAnnounce)
+void CSigSharesManager::CollectSigSharesToSend(std::unordered_map<NodeId, std::vector<CSigShare>>& sigSharesToSend, const std::vector<CNode*>& vNodes)
 {
-    std::set<std::pair<Consensus::LLMQType, uint256>> quorumNodesPrepared;
+    AssertLockHeld(cs);
 
-    for (auto& sigShareKey : this->sigSharesToAnnounce) {
-        auto& signHash = sigShareKey.first;
-        auto quorumMember = sigShareKey.second;
-        auto sigShareIt = sigShares.find(sigShareKey);
-        if (sigShareIt == sigShares.end()) {
+    std::unordered_map<uint256, CNode*> proTxToNode;
+    for (const auto& pnode : vNodes) {
+        if (pnode->verifiedProRegTxHash.IsNull()) {
             continue;
         }
-        auto& sigShare = sigShareIt->second;
+        proTxToNode.emplace(pnode->verifiedProRegTxHash, pnode);
+    }
 
-        auto quorumKey = std::make_pair((Consensus::LLMQType)sigShare.llmqType, sigShare.quorumHash);
-        if (quorumNodesPrepared.emplace(quorumKey).second) {
-            // make sure we announce to at least the nodes which we know through the inter-quorum-communication system
+    auto curTime = GetTime<std::chrono::milliseconds>().count();
 
-            auto nodeIds = g_connman->GetTierTwoConnMan()->getQuorumNodes(quorumKey.first, quorumKey.second);
-            for (auto nodeId : nodeIds) {
-                auto& nodeState = nodeStates[nodeId];
-                nodeState.interestedIn.emplace(quorumKey);
-            }
+    for (auto& p : signedSessions) {
+        if (p.second.attempt >= p.second.quorum->params.recoveryMembers) {
+            continue;
         }
 
-        for (auto& p : nodeStates) {
-            auto nodeId = p.first;
-            auto& nodeState = p.second;
+        if (curTime >= p.second.nextAttemptTime) {
+            int64_t waitTime = exp2(p.second.attempt) * EXP_SEND_FOR_RECOVERY_TIMEOUT;
+            waitTime = std::min(MAX_SEND_FOR_RECOVERY_TIMEOUT, waitTime);
+            p.second.nextAttemptTime = curTime + waitTime;
+            auto dmn = SelectMemberForRecovery(p.second.quorum, p.second.sigShare.id, p.second.attempt);
+            p.second.attempt++;
+
+            LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- signHash=%s, sending to %s, attempt=%d\n", __func__,
+                p.second.sigShare.GetSignHash().ToString(), dmn->proTxHash.ToString(), p.second.attempt);
+
+            auto it = proTxToNode.find(dmn->proTxHash);
+            if (it == proTxToNode.end()) {
+                continue;
+            }
+
+            auto& m = sigSharesToSend[it->second->GetId()];
+            m.emplace_back(p.second.sigShare);
+        }
+    }
+}
+
+// TODO unused
+void CSigSharesManager::CollectSigSharesToAnnounce(std::unordered_map<NodeId, std::unordered_map<uint256, CSigSharesInv, StaticSaltedHasher>>& sigSharesToAnnounce)
+{
+    AssertLockHeld(cs);
+
+    std::unordered_map<std::pair<Consensus::LLMQType, uint256>, std::unordered_set<NodeId>, StaticSaltedHasher> quorumNodesMap;
+
+    this->sigSharesToAnnounce.ForEach([&](const SigShareKey& sigShareKey, bool) {
+        auto& signHash = sigShareKey.first;
+        auto quorumMember = sigShareKey.second;
+        const CSigShare* sigShare = sigShares.Get(sigShareKey);
+        if (!sigShare) {
+            return;
+        }
+
+        // announce to the nodes which we know through the intra-quorum-communication system
+        auto quorumKey = std::make_pair((Consensus::LLMQType)sigShare->llmqType, sigShare->quorumHash);
+        auto it = quorumNodesMap.find(quorumKey);
+        if (it == quorumNodesMap.end()) {
+            auto nodeIds = g_connman->GetTierTwoConnMan()->getQuorumNodes(quorumKey.first, quorumKey.second);
+            it = quorumNodesMap.emplace(std::piecewise_construct, std::forward_as_tuple(quorumKey), std::forward_as_tuple(nodeIds.begin(), nodeIds.end())).first;
+        }
+
+        auto& quorumNodes = it->second;
+
+        for (auto& nodeId : quorumNodes) {
+            auto& nodeState = nodeStates[nodeId];
 
             if (nodeState.banned) {
                 continue;
             }
 
-            if (!nodeState.interestedIn.count(quorumKey)) {
-                // node is not interested in this sig share
-                // we only consider nodes to be interested if they sent us valid sig share before
-                // the sig share that we sign by ourself circumvents the inv system and is directly sent to all quorum members
-                // which are known by the deterministic inter-quorum-communication system. This is also the sig share that
-                // will tell the other nodes that we are interested in future sig shares
-                continue;
-            }
-
-            auto& session = nodeState.GetOrCreateSession((Consensus::LLMQType)sigShare.llmqType, signHash);
+            auto& session = nodeState.GetOrCreateSessionFromShare(*sigShare);
 
             if (session.knows.inv[quorumMember]) {
                 // he already knows that one
@@ -869,158 +1083,309 @@ void CSigSharesManager::CollectSigSharesToAnnounce(std::map<NodeId, std::map<uin
 
             auto& inv = sigSharesToAnnounce[nodeId][signHash];
             if (inv.inv.empty()) {
-                inv.Init((Consensus::LLMQType)sigShare.llmqType, signHash);
+                const auto& params = Params().GetConsensus().llmqs.at((Consensus::LLMQType)sigShare->llmqType);
+                inv.Init((size_t)params.size);
             }
             inv.inv[quorumMember] = true;
             session.knows.inv[quorumMember] = true;
         }
-    }
-
-    // don't announce these anymore
-    // nodes which did not send us a valid sig share before were left out now, but this is ok as it only results in slower
-    // propagation for the first signing session of a fresh quorum. The sig shares should still arrive on all nodes due to
-    // the deterministic inter-quorum-communication system
-    this->sigSharesToAnnounce.clear();
-}
-
-void CSigSharesManager::SendMessages()
-{
-    std::multimap<CService, NodeId> nodesByAddress;
-    g_connman->ForEachNode([&nodesByAddress](CNode* pnode) {
-        nodesByAddress.emplace(pnode->addr, pnode->GetId());
     });
 
-    std::map<NodeId, std::map<uint256, CSigSharesInv>> sigSharesToRequest;
-    std::map<NodeId, std::map<uint256, CBatchedSigShares>> sigSharesToSend;
-    std::map<NodeId, std::map<uint256, CSigSharesInv>> sigSharesToAnnounce;
+    // don't announce these anymore
+    this->sigSharesToAnnounce.Clear();
+}
+
+bool CSigSharesManager::SendMessages()
+{
+    std::unordered_map<NodeId, std::unordered_map<uint256, CSigSharesInv, StaticSaltedHasher>> sigSharesToRequest;
+    std::unordered_map<NodeId, std::unordered_map<uint256, CBatchedSigShares, StaticSaltedHasher>> sigShareBatchesToSend;
+    std::unordered_map<NodeId, std::vector<CSigShare>> sigSharesToSend;
+    std::unordered_map<NodeId, std::unordered_map<uint256, CSigSharesInv, StaticSaltedHasher>> sigSharesToAnnounce;
+    std::unordered_map<NodeId, std::vector<CSigSesAnn>> sigSessionAnnouncements;
+
+    auto addSigSesAnnIfNeeded = [&](NodeId nodeId, const uint256& signHash) {
+        auto& nodeState = nodeStates[nodeId];
+        auto session = nodeState.GetSessionBySignHash(signHash);
+        assert(session);
+        if (session->sendSessionId == (uint32_t)-1) {
+            session->sendSessionId = nodeState.nextSendSessionId++;
+
+            CSigSesAnn sigSesAnn;
+            sigSesAnn.sessionId = session->sendSessionId;
+            sigSesAnn.llmqType = (uint8_t)session->llmqType;
+            sigSesAnn.quorumHash = session->quorumHash;
+            sigSesAnn.id = session->id;
+            sigSesAnn.msgHash = session->msgHash;
+
+            sigSessionAnnouncements[nodeId].emplace_back(sigSesAnn);
+        }
+        return session->sendSessionId;
+    };
+
+    std::vector<CNode*> vNodesCopy = g_connman->CopyNodeVector(CConnman::FullyConnectedOnly);
 
     {
         LOCK(cs);
-        CollectSigSharesToRequest(sigSharesToRequest);
-        CollectSigSharesToSend(sigSharesToSend);
-        CollectSigSharesToAnnounce(sigSharesToAnnounce);
+        CollectSigSharesToSend(sigSharesToSend, vNodesCopy);
+
+        for (auto& p : sigSharesToRequest) {
+            for (auto& p2 : p.second) {
+                p2.second.sessionId = addSigSesAnnIfNeeded(p.first, p2.first);
+            }
+        }
+        for (auto& p : sigShareBatchesToSend) {
+            for (auto& p2 : p.second) {
+                p2.second.sessionId = addSigSesAnnIfNeeded(p.first, p2.first);
+            }
+        }
+        for (auto& p : sigSharesToAnnounce) {
+            for (auto& p2 : p.second) {
+                p2.second.sessionId = addSigSesAnnIfNeeded(p.first, p2.first);
+            }
+        }
     }
 
-    g_connman->ForEachNode([&](CNode* pnode) {
+    bool didSend = false;
+
+    for (auto& pnode : vNodesCopy) {
         CNetMsgMaker msgMaker(pnode->GetSendVersion());
 
-        auto it = sigSharesToRequest.find(pnode->GetId());
-        if (it != sigSharesToRequest.end()) {
-            for (auto& p : it->second) {
-                assert(p.second.CountSet() != 0);
-                LogPrintf("llmq", "CSigSharesManager::SendMessages -- QGETSIGSHARES inv={%s}, node=%d\n",
-                    p.second.ToString(), pnode->GetId());
-                g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QGETSIGSHARES, p.second));
+        auto it1 = sigSessionAnnouncements.find(pnode->GetId());
+        if (it1 != sigSessionAnnouncements.end()) {
+            std::vector<CSigSesAnn> msgs;
+            msgs.reserve(it1->second.size());
+            for (auto& sigSesAnn : it1->second) {
+                LogPrint(BCLog::LLMQ, "CSigSharesManager::SendMessages -- QSIGSESANN signHash=%s, sessionId=%d, node=%d\n",
+                    llmq::utils::BuildSignHash(sigSesAnn).ToString(), sigSesAnn.sessionId, pnode->GetId());
+                msgs.emplace_back(sigSesAnn);
+                if (msgs.size() == MAX_MSGS_CNT_QSIGSESANN) {
+                    g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QSIGSESANN, msgs), false);
+                    msgs.clear();
+                    didSend = true;
+                }
+            }
+            if (!msgs.empty()) {
+                g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QSIGSESANN, msgs), false);
+                didSend = true;
             }
         }
 
-        auto jt = sigSharesToSend.find(pnode->GetId());
-        if (jt != sigSharesToSend.end()) {
+        auto it = sigSharesToRequest.find(pnode->GetId());
+        if (it != sigSharesToRequest.end()) {
+            std::vector<CSigSharesInv> msgs;
+            for (auto& p : it->second) {
+                assert(p.second.CountSet() != 0);
+                LogPrint(BCLog::LLMQ, "CSigSharesManager::SendMessages -- QGETSIGSHARES signHash=%s, inv={%s}, node=%d\n",
+                    p.first.ToString(), p.second.ToString(), pnode->GetId());
+                msgs.emplace_back(std::move(p.second));
+                if (msgs.size() == MAX_MSGS_CNT_QGETSIGSHARES) {
+                    g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QGETSIGSHARES, msgs), false);
+                    msgs.clear();
+                    didSend = true;
+                }
+            }
+            if (!msgs.empty()) {
+                g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QGETSIGSHARES, msgs), false);
+                didSend = true;
+            }
+        }
+
+        auto jt = sigShareBatchesToSend.find(pnode->GetId());
+        if (jt != sigShareBatchesToSend.end()) {
+            size_t totalSigsCount = 0;
+            std::vector<CBatchedSigShares> msgs;
             for (auto& p : jt->second) {
                 assert(!p.second.sigShares.empty());
-                LogPrintf("llmq", "CSigSharesManager::SendMessages -- QBSIGSHARES inv={%s}, node=%d\n",
-                    p.second.ToInv().ToString(), pnode->GetId());
-                g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QBSIGSHARES, p.second));
+                LogPrint(BCLog::LLMQ, "CSigSharesManager::SendMessages -- QBSIGSHARES signHash=%s, inv={%s}, node=%d\n",
+                    p.first.ToString(), p.second.ToInvString(), pnode->GetId());
+                if (totalSigsCount + p.second.sigShares.size() > MAX_MSGS_TOTAL_BATCHED_SIGS) {
+                    g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QBSIGSHARES, msgs), false);
+                    msgs.clear();
+                    totalSigsCount = 0;
+                    didSend = true;
+                }
+                totalSigsCount += p.second.sigShares.size();
+                msgs.emplace_back(std::move(p.second));
+            }
+            if (!msgs.empty()) {
+                g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QBSIGSHARES, std::move(msgs)), false);
+                didSend = true;
             }
         }
 
         auto kt = sigSharesToAnnounce.find(pnode->GetId());
         if (kt != sigSharesToAnnounce.end()) {
+            std::vector<CSigSharesInv> msgs;
             for (auto& p : kt->second) {
                 assert(p.second.CountSet() != 0);
-                LogPrintf("llmq", "CSigSharesManager::SendMessages -- QSIGSHARESINV inv={%s}, node=%d\n",
-                    p.second.ToString(), pnode->GetId());
-                g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QSIGSHARESINV, p.second));
+                LogPrint(BCLog::LLMQ, "CSigSharesManager::SendMessages -- QSIGSHARESINV signHash=%s, inv={%s}, node=%d\n",
+                    p.first.ToString(), p.second.ToString(), pnode->GetId());
+                msgs.emplace_back(std::move(p.second));
+                if (msgs.size() == MAX_MSGS_CNT_QSIGSHARESINV) {
+                    g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QSIGSHARESINV, msgs), false);
+                    msgs.clear();
+                    didSend = true;
+                }
+            }
+            if (!msgs.empty()) {
+                g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QSIGSHARESINV, msgs), false);
+                didSend = true;
             }
         }
 
-        return true;
-    });
+        auto lt = sigSharesToSend.find(pnode->GetId());
+        if (lt != sigSharesToSend.end()) {
+            std::vector<CSigShare> msgs;
+            for (auto& sigShare : lt->second) {
+                LogPrint(BCLog::LLMQ, "CSigSharesManager::SendMessages -- QSIGSHARE signHash=%s, node=%d\n",
+                    sigShare.GetSignHash().ToString(), pnode->GetId());
+                msgs.emplace_back(std::move(sigShare));
+                if (msgs.size() == MAX_MSGS_SIG_SHARES) {
+                    g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QSIGSHARE, msgs), false);
+                    msgs.clear();
+                    didSend = true;
+                }
+            }
+            if (!msgs.empty()) {
+                g_connman->PushMessage(pnode, msgMaker.Make(NetMsgType::QSIGSHARE, msgs), false);
+                didSend = true;
+            }
+        }
+    }
+
+    // looped through all nodes, release them
+    g_connman->ReleaseNodeVector(vNodesCopy);
+
+    return didSend;
+}
+
+bool CSigSharesManager::GetSessionInfoByRecvId(NodeId nodeId, uint32_t sessionId, CSigSharesNodeState::SessionInfo& retInfo)
+{
+    LOCK(cs);
+    return nodeStates[nodeId].GetSessionInfoByRecvId(sessionId, retInfo);
+}
+
+CSigShare CSigSharesManager::RebuildSigShare(const CSigSharesNodeState::SessionInfo& session, const CBatchedSigShares& batchedSigShares, size_t idx)
+{
+    assert(idx < batchedSigShares.sigShares.size());
+    auto& s = batchedSigShares.sigShares[idx];
+    CSigShare sigShare;
+    sigShare.llmqType = session.llmqType;
+    sigShare.quorumHash = session.quorumHash;
+    sigShare.quorumMember = s.first;
+    sigShare.id = session.id;
+    sigShare.msgHash = session.msgHash;
+    sigShare.sigShare = s.second;
+    sigShare.UpdateKey();
+    return sigShare;
 }
 
 void CSigSharesManager::Cleanup()
 {
-    int64_t now = GetTimeMillis();
-    if (now - lastCleanupTime < 5000) {
+    int64_t now = GetAdjustedTime();
+    if (now - lastCleanupTime < 5) {
         return;
     }
 
-    std::set<std::pair<Consensus::LLMQType, uint256>> quorumsToCheck;
+    // This map is first filled with all quorums found in all sig shares. Then we remove all inactive quorums and
+    // loop through all sig shares again to find the ones belonging to the inactive quorums. We then delete the
+    // sessions belonging to the sig shares. At the same time, we use this map as a cache when we later need to resolve
+    // quorumHash -> quorumPtr (as GetQuorum() requires cs_main, leading to deadlocks with cs held)
+    std::unordered_map<std::pair<Consensus::LLMQType, uint256>, CQuorumCPtr, StaticSaltedHasher> quorums;
 
     {
         LOCK(cs);
+        sigShares.ForEach([&](const SigShareKey& k, const CSigShare& sigShare) {
+            quorums.emplace(std::make_pair((Consensus::LLMQType) sigShare.llmqType, sigShare.quorumHash), nullptr);
+        });
+    }
 
-        // Remove sessions which timed out
-        std::set<uint256> timeoutSessions;
-        for (auto& p : firstSeenForSessions) {
-            auto& signHash = p.first;
-            int64_t time = p.second;
-
-            if (now - time >= SIGNING_SESSION_TIMEOUT) {
-                timeoutSessions.emplace(signHash);
-            }
-        }
-        for (auto& signHash : timeoutSessions) {
-            size_t count = CountBySignHash(sigShares, signHash);
-
-            if (count > 0) {
-                auto itPair = FindBySignHash(sigShares, signHash);
-                auto& firstSigShare = itPair.first->second;
-                LogPrintf("CSigSharesManager::%s -- signing session timed out. signHash=%s, id=%s, msgHash=%s, sigShareCount=%d\n", __func__,
-                    signHash.ToString(), firstSigShare.id.ToString(), firstSigShare.msgHash.ToString(), count);
-            } else {
-                LogPrintf("CSigSharesManager::%s -- signing session timed out. signHash=%s, sigShareCount=%d\n", __func__,
-                    signHash.ToString(), count);
-            }
-            RemoveSigSharesForSession(signHash);
-        }
-
-        // Remove sessions which were successfully recovered
-        std::set<uint256> doneSessions;
-        for (auto& p : sigShares) {
-            if (doneSessions.count(p.second.GetSignHash())) {
-                continue;
-            }
-            if (quorumSigningManager->HasRecoveredSigForSession(p.second.GetSignHash())) {
-                doneSessions.emplace(p.second.GetSignHash());
-            }
-        }
-        for (auto& signHash : doneSessions) {
-            RemoveSigSharesForSession(signHash);
-        }
-
-        for (auto& p : sigShares) {
-            quorumsToCheck.emplace((Consensus::LLMQType)p.second.llmqType, p.second.quorumHash);
+    // Find quorums which became inactive
+    for (auto it = quorums.begin(); it != quorums.end(); ) {
+        if (llmq::utils::IsQuorumActive(it->first.first, it->first.second)) {
+            it->second = quorumManager->GetQuorum(it->first.first, it->first.second);
+            ++it;
+        } else {
+            it = quorums.erase(it);
         }
     }
 
-    {
-        // Find quorums which became inactive
-        LOCK(cs_main);
-        for (auto it = quorumsToCheck.begin(); it != quorumsToCheck.end();) {
-            if (llmq::utils::IsQuorumActive(it->first, it->second)) {
-                it = quorumsToCheck.erase(it);
-            } else {
-                ++it;
-            }
-        }
-    }
     {
         // Now delete sessions which are for inactive quorums
         LOCK(cs);
-        std::set<uint256> inactiveQuorumSessions;
-        for (auto& p : sigShares) {
-            if (quorumsToCheck.count(std::make_pair((Consensus::LLMQType)p.second.llmqType, p.second.quorumHash))) {
-                inactiveQuorumSessions.emplace(p.second.GetSignHash());
+        std::unordered_set<uint256, StaticSaltedHasher> inactiveQuorumSessions;
+        sigShares.ForEach([&](const SigShareKey& k, const CSigShare& sigShare) {
+            if (!quorums.count(std::make_pair((Consensus::LLMQType)sigShare.llmqType, sigShare.quorumHash))) {
+                inactiveQuorumSessions.emplace(sigShare.GetSignHash());
             }
-        }
+        });
         for (auto& signHash : inactiveQuorumSessions) {
             RemoveSigSharesForSession(signHash);
         }
     }
 
+    {
+        LOCK(cs);
+
+        // Remove sessions which were successfully recovered
+        std::unordered_set<uint256, StaticSaltedHasher> doneSessions;
+        sigShares.ForEach([&](const SigShareKey& k, const CSigShare& sigShare) {
+            if (doneSessions.count(sigShare.GetSignHash())) {
+                return;
+            }
+            if (quorumSigningManager->HasRecoveredSigForSession(sigShare.GetSignHash())) {
+                doneSessions.emplace(sigShare.GetSignHash());
+            }
+        });
+        for (auto& signHash : doneSessions) {
+            RemoveSigSharesForSession(signHash);
+        }
+
+        // Remove sessions which timed out
+        std::unordered_set<uint256, StaticSaltedHasher> timeoutSessions;
+        for (auto& p : timeSeenForSessions) {
+            auto& signHash = p.first;
+            int64_t lastSeenTime = p.second;
+
+            if (now - lastSeenTime >= SESSION_NEW_SHARES_TIMEOUT) {
+                timeoutSessions.emplace(signHash);
+            }
+        }
+        for (auto& signHash : timeoutSessions) {
+            size_t count = sigShares.CountForSignHash(signHash);
+
+            if (count > 0) {
+                auto m = sigShares.GetAllForSignHash(signHash);
+                assert(m);
+
+                auto& oneSigShare = m->begin()->second;
+
+                std::string strMissingMembers;
+                if (LogAcceptCategory(BCLog::LogFlags::LLMQ)) {
+                    auto quorumIt = quorums.find(std::make_pair((Consensus::LLMQType)oneSigShare.llmqType, oneSigShare.quorumHash));
+                    if (quorumIt != quorums.end()) {
+                        auto& quorum = quorumIt->second;
+                        for (size_t i = 0; i < quorum->members.size(); i++) {
+                            if (!m->count((uint16_t)i)) {
+                                auto& dmn = quorum->members[i];
+                                strMissingMembers += strprintf("\n  %s", dmn->proTxHash.ToString());
+                            }
+                        }
+                    }
+                }
+
+                LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- signing session timed out. signHash=%s, id=%s, msgHash=%s, sigShareCount=%d, missingMembers=%s\n", __func__,
+                    signHash.ToString(), oneSigShare.id.ToString(), oneSigShare.msgHash.ToString(), count, strMissingMembers);
+            } else {
+                LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- signing session timed out. signHash=%s, sigShareCount=%d\n", __func__,
+                    signHash.ToString(), count);
+            }
+            RemoveSigSharesForSession(signHash);
+        }
+    }
+
     // Find node states for peers that disappeared from CConnman
-    std::set<NodeId> nodeStatesToDelete;
+    std::unordered_set<NodeId> nodeStatesToDelete;
     for (auto& p : nodeStates) {
         nodeStatesToDelete.emplace(p.first);
     }
@@ -1033,13 +1398,13 @@ void CSigSharesManager::Cleanup()
     for (auto nodeId : nodeStatesToDelete) {
         auto& nodeState = nodeStates[nodeId];
         // remove global requested state to force a re-request from another node
-        for (auto& p : nodeState.requestedSigShares) {
-            sigSharesRequested.erase(p.first);
-        }
+        nodeState.requestedSigShares.ForEach([&](const SigShareKey& k, bool) {
+            sigSharesRequested.Erase(k);
+        });
         nodeStates.erase(nodeId);
     }
 
-    lastCleanupTime = GetTimeMillis();
+    lastCleanupTime = GetAdjustedTime();
 }
 
 void CSigSharesManager::RemoveSigSharesForSession(const uint256& signHash)
@@ -1049,10 +1414,11 @@ void CSigSharesManager::RemoveSigSharesForSession(const uint256& signHash)
         ns.RemoveSession(signHash);
     }
 
-    RemoveBySignHash(sigSharesRequested, signHash);
-    RemoveBySignHash(sigSharesToAnnounce, signHash);
-    RemoveBySignHash(sigShares, signHash);
-    firstSeenForSessions.erase(signHash);
+    sigSharesRequested.EraseAllForSignHash(signHash);
+    sigSharesToAnnounce.EraseAllForSignHash(signHash);
+    sigShares.EraseAllForSignHash(signHash);
+    signedSessions.erase(signHash);
+    timeSeenForSessions.erase(signHash);
 }
 
 void CSigSharesManager::RemoveBannedNodeStates()
@@ -1060,13 +1426,13 @@ void CSigSharesManager::RemoveBannedNodeStates()
     // Called regularly to cleanup local node states for banned nodes
 
     LOCK2(cs, cs_main);
-    std::set<NodeId> toRemove;
+    std::unordered_set<NodeId> toRemove;
     for (auto it = nodeStates.begin(); it != nodeStates.end();) {
         if (IsBanned(it->first)) {
             // re-request sigshares from other nodes
-            for (auto& p : it->second.requestedSigShares) {
-                sigSharesRequested.erase(p.first);
-            }
+            it->second.requestedSigShares.ForEach([&](const SigShareKey& k, int64_t) {
+                sigSharesRequested.Erase(k);
+            });
             it = nodeStates.erase(it);
         } else {
             ++it;
@@ -1093,29 +1459,38 @@ void CSigSharesManager::BanNode(NodeId nodeId)
     auto& nodeState = it->second;
 
     // Whatever we requested from him, let's request it from someone else now
-    for (auto& p : nodeState.requestedSigShares) {
-        sigSharesRequested.erase(p.first);
-    }
-    nodeState.requestedSigShares.clear();
+    nodeState.requestedSigShares.ForEach([&](const SigShareKey& k, int64_t) {
+        sigSharesRequested.Erase(k);
+    });
+    nodeState.requestedSigShares.Clear();
 
     nodeState.banned = true;
 }
 
 void CSigSharesManager::WorkThreadMain()
 {
-    int64_t lastProcessTime = GetTimeMillis();
+    int64_t lastSendTime = 0;
     while (!interruptSigningShare) {
+        bool didWork = false;
+
         RemoveBannedNodeStates();
-        quorumSigningManager->ProcessPendingRecoveredSigs(*g_connman);
-        ProcessPendingSigShares(*g_connman);
-        SignPendingSigShares();
-        SendMessages();
+        didWork |= quorumSigningManager->ProcessPendingRecoveredSigs(*g_connman);
+        didWork |= ProcessPendingSigShares(*g_connman);
+        didWork |= SignPendingSigShares();
+
+        if (GetTimeMillis() - lastSendTime > 100) {
+            SendMessages();
+            lastSendTime = GetTimeMillis();
+        }
+
         Cleanup();
         quorumSigningManager->Cleanup();
 
         // TODO Wakeup when pending signing is needed?
-        if (!interruptSigningShare.sleep_for(std::chrono::milliseconds(100))) {
-            return;
+        if (!didWork) {
+            if (!interruptSigningShare.sleep_for(std::chrono::milliseconds(100))) {
+                return;
+            }
         }
     }
 }
@@ -1126,7 +1501,7 @@ void CSigSharesManager::AsyncSign(const CQuorumCPtr& quorum, const uint256& id, 
     pendingSigns.emplace_back(quorum, id, msgHash);
 }
 
-void CSigSharesManager::SignPendingSigShares()
+bool CSigSharesManager::SignPendingSigShares()
 {
     std::vector<std::tuple<const CQuorumCPtr, uint256, uint256>> v;
     {
@@ -1137,6 +1512,8 @@ void CSigSharesManager::SignPendingSigShares()
     for (auto& t : v) {
         Sign(std::get<0>(t), std::get<1>(t), std::get<2>(t));
     }
+
+    return !v.empty();
 }
 
 void CSigSharesManager::Sign(const CQuorumCPtr& quorum, const uint256& id, const uint256& msgHash)
@@ -1149,7 +1526,7 @@ void CSigSharesManager::Sign(const CQuorumCPtr& quorum, const uint256& id, const
 
     CBLSSecretKey skShare = quorum->GetSkShare();
     if (!skShare.IsValid()) {
-        LogPrintf("CSigSharesManager::%s -- we don't have our skShare for quorum %s\n", __func__, quorum->pindexQuorum->GetBlockHash().ToString());
+        LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- we don't have our skShare for quorum %s\n", __func__, quorum->qc.quorumHash.ToString());
         return;
     }
 
@@ -1161,23 +1538,62 @@ void CSigSharesManager::Sign(const CQuorumCPtr& quorum, const uint256& id, const
 
     CSigShare sigShare;
     sigShare.llmqType = quorum->params.type;
-    sigShare.quorumHash = quorum->pindexQuorum->GetBlockHash();
+    sigShare.quorumHash = quorum->qc.quorumHash;
     sigShare.id = id;
     sigShare.msgHash = msgHash;
     sigShare.quorumMember = (uint16_t)memberIdx;
     uint256 signHash = llmq::utils::BuildSignHash(sigShare);
 
-    sigShare.sigShare = skShare.Sign(signHash);
-    if (!sigShare.sigShare.IsValid()) {
-        LogPrintf("CSigSharesManager::%s -- failed to sign sigShare. id=%s, msgHash=%s, time=%s\n", __func__,
-            sigShare.id.ToString(), sigShare.msgHash.ToString(), t.count());
+    sigShare.sigShare.Set(skShare.Sign(signHash));
+    if (!sigShare.sigShare.Get().IsValid()) {
+        LogPrintf("CSigSharesManager::%s -- failed to sign sigShare. signHahs=%s, id=%s, msgHash=%s, time=%s\n", __func__,
+            signHash.ToString(), sigShare.id.ToString(), sigShare.msgHash.ToString(), t.count());
         return;
     }
 
     sigShare.UpdateKey();
 
-    LogPrintf("CSigSharesManager::%s -- signed sigShare. id=%s, msgHash=%s, time=%s\n", __func__,
-        sigShare.id.ToString(), sigShare.msgHash.ToString(), t.count());
+    LogPrint(BCLog::LLMQ, "CSigSharesManager::%s -- signed sigShare. signHash=%s, id=%s, msgHash=%s, llmqType=%d, quorum=%s, time=%s\n", __func__,
+        signHash.ToString(), sigShare.id.ToString(), sigShare.msgHash.ToString(), quorum->params.type, quorum->qc.quorumHash.ToString(), t.count());
     ProcessSigShare(-1, sigShare, *g_connman, quorum);
+
+    LOCK(cs);
+    auto& session = signedSessions[sigShare.GetSignHash()];
+    session.sigShare = sigShare;
+    session.quorum = quorum;
+    session.nextAttemptTime = 0;
+    session.attempt = 0;
 }
+
+// causes all known sigShares to be re-announced
+void CSigSharesManager::ForceReAnnouncement(const CQuorumCPtr& quorum, Consensus::LLMQType llmqType, const uint256& id, const uint256& msgHash)
+{
+    LOCK(cs);
+    auto signHash = llmq::utils::BuildSignHash(llmqType, quorum->qc.quorumHash, id, msgHash);
+    auto sigs = sigShares.GetAllForSignHash(signHash);
+    if (sigs) {
+        for (auto& p : *sigs) {
+            // re-announce every sigshare to every node
+            sigSharesToAnnounce.Add(std::make_pair(signHash, p.first), true);
+        }
+    }
+    for (auto& p : nodeStates) {
+        CSigSharesNodeState& nodeState = p.second;
+        auto session = nodeState.GetSessionBySignHash(signHash);
+        if (!session) {
+            continue;
+        }
+        // pretend that the other node doesn't know about any shares so that we re-announce everything
+        session->knows.SetAll(false);
+        // we need to use a new session id as we don't know if the other node has run into a timeout already
+        session->sendSessionId = (uint32_t)-1;
+    }
+}
+
+void CSigSharesManager::HandleNewRecoveredSig(const llmq::CRecoveredSig& recoveredSig)
+{
+    LOCK(cs);
+    RemoveSigSharesForSession(llmq::utils::BuildSignHash(recoveredSig));
+}
+
 } // namespace llmq

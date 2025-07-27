@@ -15,10 +15,10 @@
 #include "clientmodel.h"
 #include "clientversion.h"
 #include "guiconstants.h"
+#include "guiutil.h"
 #include "init.h"
 #include "intro.h"
-#include "guiutil.h"
-#include "qt/pivx/qtutils.h"
+#include "qtutils.h"
 #include "util/system.h"
 
 #include <stdio.h>

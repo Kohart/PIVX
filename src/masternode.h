@@ -3,8 +3,8 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef MASTERNODE_H
-#define MASTERNODE_H
+#ifndef PIVX_MASTERNODE_H
+#define PIVX_MASTERNODE_H
 
 #include "key_io.h"
 #include "key.h"
@@ -244,7 +244,7 @@ class CMasternodeBroadcast : public CMasternode
 public:
     CMasternodeBroadcast();
     CMasternodeBroadcast(CService newAddr, CTxIn newVin, CPubKey newPubkey, CPubKey newPubkey2, int protocolVersionIn, const CMasternodePing& _lastPing);
-    CMasternodeBroadcast(const CMasternode& mn);
+    explicit CMasternodeBroadcast(const CMasternode& mn);
 
     bool CheckAndUpdate(int& nDoS);
 
@@ -279,4 +279,4 @@ public:
 // Returns a shared pointer to a masternode object initialized from a DMN.
 MasternodeRef MakeMasternodeRefForDMN(const CDeterministicMNCPtr& dmn);
 
-#endif
+#endif // PIVX_MASTERNODE_H

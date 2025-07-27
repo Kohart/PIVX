@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_QT_PAYMENTSERVER_H
-#define BITCOIN_QT_PAYMENTSERVER_H
+#ifndef PIVX_QT_PAYMENTSERVER_H
+#define PIVX_QT_PAYMENTSERVER_H
 
 // This class handles payment requests from clicking on
 // pivx: URIs
@@ -65,7 +65,7 @@ public:
     static bool ipcSendCommandLine();
 
     // parent should be QApplication object
-    PaymentServer(QObject* parent, bool startLocalServer = true);
+    explicit PaymentServer(QObject* parent, bool startLocalServer = true);
     ~PaymentServer();
 
     // OptionsModel is used for getting proxy settings and display unit
@@ -100,4 +100,4 @@ private:
     OptionsModel* optionsModel;
 };
 
-#endif // BITCOIN_QT_PAYMENTSERVER_H
+#endif // PIVX_QT_PAYMENTSERVER_H

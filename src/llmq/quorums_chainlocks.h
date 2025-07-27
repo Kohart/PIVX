@@ -3,8 +3,8 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef PIVX_QUORUMS_CHAINLOCKS_H
-#define PIVX_QUORUMS_CHAINLOCKS_H
+#ifndef PIVX_LLMQ_QUORUMS_CHAINLOCKS_H
+#define PIVX_LLMQ_QUORUMS_CHAINLOCKS_H
 
 #include "llmq/quorums.h"
 #include "llmq/quorums_signing.h"
@@ -34,6 +34,8 @@ public:
         READWRITE(obj.blockHash);
         READWRITE(obj.sig);
     }
+
+    bool IsNull() const;
     std::string ToString() const;
 };
 
@@ -45,7 +47,7 @@ class CChainLocksHandler : public CRecoveredSigsListener
 private:
     CScheduler* scheduler;
     RecursiveMutex cs;
-    std::atomic<bool> inEnforceBestChainLock{false};
+    bool tryLockChainTipScheduled{false};
 
     uint256 bestChainLockHash;
     CChainLockSig bestChainLock;
@@ -62,7 +64,7 @@ private:
     int64_t lastCleanupTime{0};
 
 public:
-    CChainLocksHandler(CScheduler* _scheduler);
+    explicit CChainLocksHandler(CScheduler* _scheduler);
     ~CChainLocksHandler();
     void Start();
     void Stop();
@@ -70,11 +72,13 @@ public:
 public:
     bool AlreadyHave(const CInv& inv);
     bool GetChainLockByHash(const uint256& hash, CChainLockSig& ret);
+    CChainLockSig GetBestChainLock();
 
     void ProcessMessage(CNode* pfrom, const std::string& strCommand, CDataStream& vRecv, CConnman& connman);
     void ProcessNewChainLock(NodeId from, const CChainLockSig& clsig, const uint256& hash);
     void AcceptedBlockHeader(const CBlockIndex* pindexNew);
-    void UpdatedBlockTip(const CBlockIndex* pindexNew, const CBlockIndex* pindexFork);
+    void UpdatedBlockTip(const CBlockIndex* pindexNew);
+    void TrySignChainTip();
     void EnforceBestChainLock();
     virtual void HandleNewRecoveredSig(const CRecoveredSig& recoveredSig);
 
@@ -86,7 +90,6 @@ private:
     bool InternalHasChainLock(int nHeight, const uint256& blockHash);
     bool InternalHasConflictingChainLock(int nHeight, const uint256& blockHash);
 
-    void ScheduleInvalidateBlock(const CBlockIndex* pindex);
     void DoInvalidateBlock(const CBlockIndex* pindex, bool activateBestChain);
 
     void Cleanup();
@@ -95,4 +98,4 @@ private:
 extern std::unique_ptr<CChainLocksHandler> chainLocksHandler;
 }
 
-#endif //PIVX_QUORUMS_CHAINLOCKS_H
+#endif // PIVX_LLMQ_QUORUMS_CHAINLOCKS_H

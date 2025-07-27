@@ -14,8 +14,8 @@
 #include "fs.h"
 #include "guiutil.h"
 
+#include "qtutils.h"
 #include "util/system.h"
-#include "qt/pivx/qtutils.h"
 
 #include <QFileDialog>
 #include <QMessageBox>
@@ -44,7 +44,7 @@ class FreespaceChecker : public QObject
     Q_OBJECT
 
 public:
-    FreespaceChecker(Intro* intro);
+    explicit FreespaceChecker(Intro* intro);
 
     enum Status {
         ST_OK,

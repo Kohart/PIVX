@@ -2,8 +2,8 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef PIVX_CSPORKDB_H
-#define PIVX_CSPORKDB_H
+#ifndef PIVX_SPORKDB_H
+#define PIVX_SPORKDB_H
 
 #include "fs.h"
 #include "dbwrapper.h"
@@ -12,7 +12,7 @@
 class CSporkDB : public CDBWrapper
 {
 public:
-    CSporkDB(size_t nCacheSize, bool fMemory = false, bool fWipe = false);
+    explicit CSporkDB(size_t nCacheSize, bool fMemory = false, bool fWipe = false);
 
 private:
     CSporkDB(const CSporkDB&);
@@ -25,4 +25,4 @@ public:
 };
 
 
-#endif //PIVX_CSPORKDB_H
+#endif // PIVX_SPORKDB_H

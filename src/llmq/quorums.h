@@ -3,8 +3,8 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef PIVX_QUORUMS_H
-#define PIVX_QUORUMS_H
+#ifndef PIVX_LLMQ_QUORUMS_H
+#define PIVX_LLMQ_QUORUMS_H
 
 #include "bls/bls_worker.h"
 #include "bls/bls_wrapper.h"
@@ -35,11 +35,10 @@ class CQuorum
 
 public:
     const Consensus::LLMQParams& params;
-    uint256 minedBlockHash;
+    CFinalCommitment qc;
     const CBlockIndex* pindexQuorum;
+    uint256 minedBlockHash;
     std::vector<CDeterministicMNCPtr> members;
-    std::vector<bool> validMembers;
-    CBLSPublicKey quorumPublicKey;
 
     // These are only valid when we either participated in the DKG or fully watched it
     BLSVerificationVectorPtr quorumVvec;
@@ -55,7 +54,7 @@ private:
 public:
     CQuorum(const Consensus::LLMQParams& _params, CBLSWorker& _blsWorker) : params(_params), blsCache(_blsWorker), stopCachePopulatorThread(false) {}
     ~CQuorum();
-    void Init(const uint256& minedBlockHash, const CBlockIndex* pindexQuorum, const std::vector<CDeterministicMNCPtr>& members, const std::vector<bool>& validMembers, const CBLSPublicKey& quorumPublicKey);
+    void Init(const CFinalCommitment& _qc, const CBlockIndex* _pindexQuorum, const uint256& _minedBlockHash, const std::vector<CDeterministicMNCPtr>& _members);
 
     bool IsMember(const uint256& proTxHash) const;
     bool IsValidMember(const uint256& proTxHash) const;
@@ -76,7 +75,7 @@ typedef std::shared_ptr<const CQuorum> CQuorumCPtr;
  * The quorum manager maintains quorums which were mined on chain. When a quorum is requested from the manager,
  * it will lookup the commitment (through CQuorumBlockProcessor) and build a CQuorum object from it.
  *
- * It is also responsible for initialization of the inter-quorum connections for new quorums.
+ * It is also responsible for initialization of the intra-quorum connections for new quorums.
  */
 class CQuorumManager
 {
@@ -118,4 +117,4 @@ private:
 extern std::unique_ptr<CQuorumManager> quorumManager;
 } // namespace llmq
 
-#endif // PIVX_QUORUMS_H
+#endif // PIVX_LLMQ_QUORUMS_H

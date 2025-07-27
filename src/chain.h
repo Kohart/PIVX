@@ -7,8 +7,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_CHAIN_H
-#define BITCOIN_CHAIN_H
+#ifndef PIVX_CHAIN_H
+#define PIVX_CHAIN_H
 
 #include "chainparams.h"
 #include "flatfile.h"
@@ -205,7 +205,7 @@ public:
     unsigned int nTimeMax{0};
 
     CBlockIndex() {}
-    CBlockIndex(const CBlock& block);
+    explicit CBlockIndex(const CBlock& block);
 
     std::string ToString() const;
 
@@ -465,4 +465,4 @@ public:
     CBlockIndex* FindEarliestAtLeast(int64_t nTime) const;
 };
 
-#endif // BITCOIN_CHAIN_H
+#endif // PIVX_CHAIN_H

@@ -8,8 +8,7 @@
 #include "config/pivx-config.h"
 #endif
 
-#include "qt/pivx/pivxgui.h"
-
+#include "pivxgui.h"
 
 #include "fs.h"
 #include "guiinterface.h"
@@ -19,20 +18,20 @@
 #include "qt/guiconstants.h"
 #include "qt/guiutil.h"
 #include "qt/intro.h"
-#include "qt/optionsmodel.h"
 #include "qt/networkstyle.h"
-#include "qt/pivx/splash.h"
-#include "qt/pivx/welcomecontentwidget.h"
+#include "qt/optionsmodel.h"
 #include "qt/winshutdownmonitor.h"
 #include "rpc/server.h"
 #include "shutdown.h"
+#include "splash.h"
 #include "util/system.h"
 #include "utilitydialog.h"
 #include "warnings.h"
+#include "welcomecontentwidget.h"
 
 #ifdef ENABLE_WALLET
-#include "qt/pivx/governancemodel.h"
-#include "qt/pivx/mnmodel.h"
+#include "governancemodel.h"
+#include "mnmodel.h"
 #include "paymentserver.h"
 #include "walletmodel.h"
 #include "interfaces/wallet.h"

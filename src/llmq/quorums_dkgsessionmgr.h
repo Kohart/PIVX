@@ -3,8 +3,8 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef PIVX_QUORUMS_DKGSESSIONMGR_H
-#define PIVX_QUORUMS_DKGSESSIONMGR_H
+#ifndef PIVX_LLMQ_QUORUMS_DKGSESSIONMGR_H
+#define PIVX_LLMQ_QUORUMS_DKGSESSIONMGR_H
 
 #include "ctpl_stl.h"
 #include "llmq/quorums_dkgsessionhandler.h"
@@ -20,7 +20,7 @@ class CDKGSessionManager
     static const int64_t MAX_CONTRIBUTION_CACHE_TIME = 60 * 1000;
 
 private:
-    CEvoDB& evoDb;
+    CDBWrapper& llmqDb;
     CBLSWorker& blsWorker;
 
     std::map<Consensus::LLMQType, CDKGSessionHandler> dkgSessionHandlers;
@@ -45,7 +45,7 @@ private:
     std::map<ContributionsCacheKey, ContributionsCacheEntry> contributionsCache;
 
 public:
-    CDKGSessionManager(CEvoDB& _evoDb, CBLSWorker& _blsWorker);
+    CDKGSessionManager(CDBWrapper& _evoDb, CBLSWorker& _blsWorker);
     ~CDKGSessionManager() {};
 
     void StartThreads();
@@ -74,4 +74,4 @@ extern std::unique_ptr<CDKGSessionManager> quorumDKGSessionManager;
 
 }
 
-#endif //PIVX_QUORUMS_DKGSESSIONMGR_H
+#endif // PIVX_LLMQ_QUORUMS_DKGSESSIONMGR_H

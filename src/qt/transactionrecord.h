@@ -4,8 +4,8 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_QT_TRANSACTIONRECORD_H
-#define BITCOIN_QT_TRANSACTIONRECORD_H
+#ifndef PIVX_QT_TRANSACTIONRECORD_H
+#define PIVX_QT_TRANSACTIONRECORD_H
 
 #include "amount.h"
 #include "script/script.h"
@@ -108,7 +108,7 @@ public:
     /** Number of confirmation recommended for accepting a transaction */
     static const int RecommendedNumConfirmations = 6;
 
-    TransactionRecord(unsigned int size) : hash(), time(0), type(Other), address(""), debit(0), credit(0), size(size), idx(0)
+    explicit TransactionRecord(unsigned int size) : hash(), time(0), type(Other), address(""), debit(0), credit(0), size(size), idx(0)
     {
     }
 
@@ -212,4 +212,4 @@ public:
 
 };
 
-#endif // BITCOIN_QT_TRANSACTIONRECORD_H
+#endif // PIVX_QT_TRANSACTIONRECORD_H

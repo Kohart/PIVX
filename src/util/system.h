@@ -9,8 +9,8 @@
  * Server/client environment: argument handling, config file parsing,
  * thread wrappers
  */
-#ifndef BITCOIN_UTIL_SYSTEM_H
-#define BITCOIN_UTIL_SYSTEM_H
+#ifndef PIVX_UTIL_SYSTEM_H
+#define PIVX_UTIL_SYSTEM_H
 
 #if defined(HAVE_CONFIG_H)
 #include "config/pivx-config.h"
@@ -226,7 +226,8 @@ public:
     */
     bool SoftSetBoolArg(const std::string& strArg, bool fValue);
 
-    // Forces a arg setting, used only in testing
+    // Forces an arg setting. Called by SoftSetArg() if the arg hasn't already
+    // been set. Also called directly in testing.
     void ForceSetArg(const std::string& strArg, const std::string& strValue);
 
     /**
@@ -317,4 +318,4 @@ private:
 
 } // namespace util
 
-#endif // BITCOIN_UTIL_SYSTEM_H
+#endif // PIVX_UTIL_SYSTEM_H

@@ -3,8 +3,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_CONSENSUS_PARAMS_H
-#define BITCOIN_CONSENSUS_PARAMS_H
+#ifndef PIVX_CONSENSUS_PARAMS_H
+#define PIVX_CONSENSUS_PARAMS_H
 
 #include "amount.h"
 #include "libzerocoin/Params.h"
@@ -154,7 +154,7 @@ struct LLMQParams {
     // Number of quorums to consider "active" for signing sessions
     int signingActiveQuorumCount;
 
-    // Used for inter-quorum communication. This is the number of quorums for which we should keep old connections. This
+    // Used for intra-quorum communication. This is the number of quorums for which we should keep old connections. This
     // should be at least one more then the active quorums set.
     int keepOldConnections;
 
@@ -278,8 +278,8 @@ struct Params {
     // LLMQ
     std::map<LLMQType, LLMQParams> llmqs;
     Optional<LLMQParams> GetLLMQParams(uint8_t llmqtype) const;
-    LLMQType llmqChainLocks;
+    LLMQType llmqTypeChainLocks;
 };
 } // namespace Consensus
 
-#endif // BITCOIN_CONSENSUS_PARAMS_H
+#endif // PIVX_CONSENSUS_PARAMS_H

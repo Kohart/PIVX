@@ -4,8 +4,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_TXDB_H
-#define BITCOIN_TXDB_H
+#ifndef PIVX_TXDB_H
+#define PIVX_TXDB_H
 
 #include "coins.h"
 #include "chain.h"
@@ -73,7 +73,7 @@ protected:
     CDBWrapper db;
 
 public:
-    CCoinsViewDB(size_t nCacheSize, bool fMemory = false, bool fWipe = false);
+    explicit CCoinsViewDB(size_t nCacheSize, bool fMemory = false, bool fWipe = false);
 
     bool GetCoin(const COutPoint& outpoint, Coin& coin) const override;
     bool HaveCoin(const COutPoint& outpoint) const override;
@@ -127,7 +127,7 @@ private:
 class CBlockTreeDB : public CDBWrapper
 {
 public:
-    CBlockTreeDB(size_t nCacheSize, bool fMemory = false, bool fWipe = false);
+    explicit CBlockTreeDB(size_t nCacheSize, bool fMemory = false, bool fWipe = false);
 
     CBlockTreeDB(const CBlockTreeDB&) = delete;
     CBlockTreeDB& operator=(const CBlockTreeDB&) = delete;
@@ -151,7 +151,7 @@ public:
 class CZerocoinDB : public CDBWrapper
 {
 public:
-    CZerocoinDB(size_t nCacheSize, bool fMemory = false, bool fWipe = false);
+    explicit CZerocoinDB(size_t nCacheSize, bool fMemory = false, bool fWipe = false);
 
 private:
     CZerocoinDB(const CZerocoinDB&);
@@ -196,4 +196,4 @@ public:
     void Wipe();
 };
 
-#endif // BITCOIN_TXDB_H
+#endif // PIVX_TXDB_H

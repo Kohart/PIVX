@@ -9,8 +9,8 @@
 #error This header can only be compiled as C++.
 #endif
 
-#ifndef BITCOIN_PROTOCOL_H
-#define BITCOIN_PROTOCOL_H
+#ifndef PIVX_PROTOCOL_H
+#define PIVX_PROTOCOL_H
 
 #include "netaddress.h"
 #include "serialize.h"
@@ -293,10 +293,12 @@ extern const char* QCONTRIB;
 extern const char* QCOMPLAINT;
 extern const char* QJUSTIFICATION;
 extern const char* QPCOMMITMENT;
+extern const char* QSIGSESANN;
 extern const char* QSIGSHARESINV;
 extern const char* QGETSIGSHARES;
 extern const char* QBSIGSHARES;
 extern const char* QSIGREC;
+extern const char* QSIGSHARE;
 extern const char* CLSIG;
 }; // namespace NetMsgType
 
@@ -481,4 +483,4 @@ private:
     std::string GetCommand() const;
 };
 
-#endif // BITCOIN_PROTOCOL_H
+#endif // PIVX_PROTOCOL_H

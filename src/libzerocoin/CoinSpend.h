@@ -11,8 +11,8 @@
  **/
 // Copyright (c) 2017-2021 The PIVX Core developers
 
-#ifndef COINSPEND_H_
-#define COINSPEND_H_
+#ifndef PIVX_LIBZEROCOIN_COINSPEND_H
+#define PIVX_LIBZEROCOIN_COINSPEND_H
 
 #include <streams.h>
 #include <utilstrencodings.h>
@@ -80,7 +80,7 @@ class CoinSpend
 public:
 
     CoinSpend() {};
-    CoinSpend(CDataStream& strm) { strm >> *this; }
+    explicit CoinSpend(CDataStream& strm) { strm >> *this; }
     virtual ~CoinSpend(){};
 
     const CBigNum& getCoinSerialNumber() const { return this->coinSerialNumber; }
@@ -140,4 +140,4 @@ private:
 };
 
 } /* namespace libzerocoin */
-#endif /* COINSPEND_H_ */
+#endif // PIVX_LIBZEROCOIN_COINSPEND_H

@@ -10,15 +10,15 @@
 
 #include "askpassphrasedialog.h"
 #include "ui_askpassphrasedialog.h"
-#include <QGraphicsDropShadowEffect>
 
+#include "defaultdialog.h"
 #include "guiconstants.h"
 #include "guiutil.h"
+#include "loadingdialog.h"
+#include "qtutils.h"
 #include "walletmodel.h"
-#include "qt/pivx/qtutils.h"
-#include "qt/pivx/loadingdialog.h"
-#include "qt/pivx/defaultdialog.h"
 
+#include <QGraphicsDropShadowEffect>
 #include <QKeyEvent>
 #include <QMessageBox>
 #include <QPushButton>

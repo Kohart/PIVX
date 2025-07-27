@@ -4,8 +4,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef BITCOIN_SCRIPT_SIGN_H
-#define BITCOIN_SCRIPT_SIGN_H
+#ifndef PIVX_SCRIPT_SIGN_H
+#define PIVX_SCRIPT_SIGN_H
 
 #include "script/interpreter.h"
 
@@ -36,7 +36,7 @@ private:
     const SigningProvider* m_provider;
 
 public:
-    PublicOnlySigningProvider(const SigningProvider* provider) : m_provider(provider) {}
+    explicit PublicOnlySigningProvider(const SigningProvider* provider) : m_provider(provider) {}
     bool GetCScript(const CScriptID &scriptid, CScript& script) const;
     bool GetPubKey(const CKeyID &address, CPubKey& pubkey) const;
 };
@@ -60,7 +60,7 @@ protected:
     const CKeyStore* keystore;
 
 public:
-    BaseSignatureCreator(const CKeyStore* keystoreIn) : keystore(keystoreIn) {}
+    explicit BaseSignatureCreator(const CKeyStore* keystoreIn) : keystore(keystoreIn) {}
     const CKeyStore& KeyStore() const { return *keystore; };
     virtual ~BaseSignatureCreator() {}
     virtual const BaseSignatureChecker& Checker() const =0;
@@ -93,7 +93,7 @@ public:
 /** A signature creator that just produces 72-byte empty signatyres. */
 class DummySignatureCreator : public BaseSignatureCreator {
 public:
-    DummySignatureCreator(const CKeyStore* keystoreIn) : BaseSignatureCreator(keystoreIn) {}
+    explicit DummySignatureCreator(const CKeyStore* keystoreIn) : BaseSignatureCreator(keystoreIn) {}
     const BaseSignatureChecker& Checker() const;
     bool CreateSig(std::vector<unsigned char>& vchSig, const CKeyID& keyid, const CScript& scriptCode, SigVersion sigversion) const;
 };
@@ -125,4 +125,4 @@ void UpdateTransaction(CMutableTransaction& tx, unsigned int nIn, const Signatur
   * Solvability is unrelated to whether we consider this output to be ours. */
 bool IsSolvable(const CKeyStore& store, const CScript& script, bool fColdStaking);
 
-#endif // BITCOIN_SCRIPT_SIGN_H
+#endif // PIVX_SCRIPT_SIGN_H

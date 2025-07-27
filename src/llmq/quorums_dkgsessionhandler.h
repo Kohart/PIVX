@@ -3,8 +3,8 @@
 // Distributed under the MIT/X11 software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#ifndef PIVX_QUORUMS_DKGSESSIONHANDLER_H
-#define PIVX_QUORUMS_DKGSESSIONHANDLER_H
+#ifndef PIVX_LLMQ_QUORUMS_DKGSESSIONHANDLER_H
+#define PIVX_LLMQ_QUORUMS_DKGSESSIONHANDLER_H
 
 #include "ctpl_stl.h"
 #include "llmq/quorums_dkgsession.h"
@@ -45,7 +45,7 @@ private:
     std::set<uint256> seenMessages;
 
 public:
-    CDKGPendingMessages(size_t _maxMessagesPerNode);
+    explicit CDKGPendingMessages(size_t _maxMessagesPerNode);
 
     void PushPendingMessage(NodeId from, CDataStream& vRecv, int invType);
     std::list<BinaryMessage> PopPendingMessages(size_t maxCount);
@@ -100,7 +100,6 @@ private:
     std::atomic<bool> stopRequested{false};
 
     const Consensus::LLMQParams& params;
-    CEvoDB& evoDb;
     CBLSWorker& blsWorker;
     CDKGSessionManager& dkgManager;
 
@@ -117,7 +116,7 @@ private:
     CDKGPendingMessages pendingPrematureCommitments;
 
 public:
-    CDKGSessionHandler(const Consensus::LLMQParams& _params, CEvoDB& _evoDb, CBLSWorker& blsWorker, CDKGSessionManager& _dkgManager);
+    CDKGSessionHandler(const Consensus::LLMQParams& _params, CBLSWorker& blsWorker, CDKGSessionManager& _dkgManager);
     ~CDKGSessionHandler();
 
     void UpdatedBlockTip(const CBlockIndex *pindexNew);
@@ -147,4 +146,4 @@ private:
 
 }
 
-#endif //PIVX_QUORUMS_DKGSESSIONHANDLER_H
+#endif // PIVX_LLMQ_QUORUMS_DKGSESSIONHANDLER_H

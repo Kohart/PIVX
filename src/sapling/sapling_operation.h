@@ -2,8 +2,8 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or https://www.opensource.org/licenses/mit-license.php.
 
-#ifndef PIVX_SAPLING_OPERATION_H
-#define PIVX_SAPLING_OPERATION_H
+#ifndef PIVX_SAPLING_SAPLING_OPERATION_H
+#define PIVX_SAPLING_SAPLING_OPERATION_H
 
 #include "amount.h"
 #include "sapling/transaction_builder.h"
@@ -62,7 +62,7 @@ struct SendManyRecipient
     {}
 
     // Transparent recipient: OP_RETURN
-    SendManyRecipient(const uint256& message):
+    explicit SendManyRecipient(const uint256& message):
             recipient(new CRecipient(GetScriptForOpReturn(message), 0, false))
     {}
 };
@@ -142,4 +142,4 @@ OperationResult GetMemoFromString(const std::string& s, std::array<unsigned char
 
 OperationResult CheckTransactionSize(std::vector<SendManyRecipient>& recipients, bool fromTaddr);
 
-#endif //PIVX_SAPLING_OPERATION_H
+#endif // PIVX_SAPLING_SAPLING_OPERATION_H
